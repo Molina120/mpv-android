@@ -24,14 +24,15 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
             android:layout_marginBottom="12dp"
+            android:minHeight="48dp"
             android:max="80" />
 
-        <!-- ارتفاع / موقعیت عمودی -->
+        <!-- موقعیت عمودی -->
         <TextView
             android:id="@+id/txtSubPos"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="موقعیت عمودی (ارتفاع): 100%"
+            android:text="موقعیت عمودی: 100 (۰=بالا، ۱۰۰=پایین)"
             android:textStyle="bold" />
 
         <SeekBar
@@ -40,7 +41,8 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
             android:layout_marginBottom="12dp"
-            android:max="130" />
+            android:minHeight="48dp"
+            android:max="100" />
 
         <!-- ضخامت حاشیه و سایه -->
         <TextView
@@ -56,6 +58,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
             android:layout_marginBottom="12dp"
+            android:minHeight="48dp"
             android:max="60" />
 
         <!-- رنگ متن زیرنویس -->

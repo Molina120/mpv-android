@@ -1,6 +1,8 @@
 package `is`.xyz.mpv
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.preference.PreferenceManager
 import android.view.LayoutInflater
 import android.view.View
@@ -18,12 +20,15 @@ object SubtitleStyleManager {
     private const val PREF_SUB_ASS_OVERRIDE = "custom_sub_ass_override"
 
     private const val DEFAULT_SIZE = 55 // بازه 20 تا 100
-    private const val DEFAULT_POS = 100 // بازه 20 تا 150
+    private const val DEFAULT_POS = 100 // بازه 0 تا 100 (0=بالا، 100=پایین)
     private const val DEFAULT_BORDER = 3.0 // بازه 0.0 تا 6.0
     private const val DEFAULT_BOLD = false
     private const val DEFAULT_COLOR = "#FFFFFF"
     private const val DEFAULT_BG_COLOR = "#00000000"
     private const val DEFAULT_ASS_OVERRIDE = true
+
+    // حداقل تأخیر بین دو اعمال متوالی روی mpv (جلوگیری از قفل شدن UI هنگام درگ)
+    private const val APPLY_DEBOUNCE_MS = 250L
 
     data class ColorOption(val name: String, val hex: String)
 
@@ -49,9 +54,9 @@ object SubtitleStyleManager {
      */
     fun applyInitialOptions(context: Context) {
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
-        val size = prefs.getInt(PREF_SUB_SIZE, DEFAULT_SIZE)
-        val pos = prefs.getInt(PREF_SUB_POS, DEFAULT_POS)
-        val border = prefs.getFloat(PREF_SUB_BORDER, DEFAULT_BORDER.toFloat()).toDouble()
+        val size = prefs.getInt(PREF_SUB_SIZE, DEFAULT_SIZE).coerceIn(20, 100)
+        val pos = prefs.getInt(PREF_SUB_POS, DEFAULT_POS).coerceIn(0, 100)
+        val border = prefs.getFloat(PREF_SUB_BORDER, DEFAULT_BORDER.toFloat()).toDouble().coerceIn(0.0, 6.0)
         val bold = prefs.getBoolean(PREF_SUB_BOLD, DEFAULT_BOLD)
         val color = prefs.getString(PREF_SUB_COLOR, DEFAULT_COLOR) ?: DEFAULT_COLOR
         val bgColor = prefs.getString(PREF_SUB_BG_COLOR, DEFAULT_BG_COLOR) ?: DEFAULT_BG_COLOR
@@ -104,19 +109,23 @@ object SubtitleStyleManager {
         val switchSubBold = view.findViewById<SwitchCompat>(R.id.switchSubBold)
         val switchAssOverride = view.findViewById<SwitchCompat>(R.id.switchAssOverride)
 
-        var currentSize = prefs.getInt(PREF_SUB_SIZE, DEFAULT_SIZE)
-        var currentPos = prefs.getInt(PREF_SUB_POS, DEFAULT_POS)
-        var currentBorder = prefs.getFloat(PREF_SUB_BORDER, DEFAULT_BORDER.toFloat()).toDouble()
+        var currentSize = prefs.getInt(PREF_SUB_SIZE, DEFAULT_SIZE).coerceIn(20, 100)
+        var currentPos = prefs.getInt(PREF_SUB_POS, DEFAULT_POS).coerceIn(0, 100)
+        var currentBorder = prefs.getFloat(PREF_SUB_BORDER, DEFAULT_BORDER.toFloat()).toDouble().coerceIn(0.0, 6.0)
         var currentBold = prefs.getBoolean(PREF_SUB_BOLD, DEFAULT_BOLD)
         var currentColor = prefs.getString(PREF_SUB_COLOR, DEFAULT_COLOR) ?: DEFAULT_COLOR
         var currentBgColor = prefs.getString(PREF_SUB_BG_COLOR, DEFAULT_BG_COLOR) ?: DEFAULT_BG_COLOR
         var currentAssOverride = prefs.getBoolean(PREF_SUB_ASS_OVERRIDE, DEFAULT_ASS_OVERRIDE)
 
-        fun syncAndSave() {
+        // فقط لیبل‌ها را به‌روز کن (بدون تماس با mpv)
+        fun updateLabels() {
             txtSubSize.text = "اندازه زیرنویس: $currentSize"
-            txtSubPos.text = "موقعیت عمودی (ارتفاع): $currentPos%"
+            txtSubPos.text = "موقعیت عمودی: $currentPos (۰=بالا، ۱۰۰=پایین)"
             txtSubBorder.text = "ضخامت حاشیه (Outline): ${"%.1f".format(currentBorder)}"
+        }
 
+        // اعمال روی mpv + ذخیره در prefs
+        fun applyAndSave() {
             applyLiveProperties(
                 currentSize, currentPos, currentBorder,
                 currentBold, currentColor, currentBgColor, currentAssOverride
@@ -133,12 +142,36 @@ object SubtitleStyleManager {
                 .apply()
         }
 
+        // debounce: هنگام درگ اسلایدر، اعمال را به تأخیر بینداز تا UI قفل نشود
+        val handler = Handler(Looper.getMainLooper())
+        var pendingApply: Runnable? = null
+
+        fun scheduleApply() {
+            pendingApply?.let { handler.removeCallbacks(it) }
+            pendingApply = Runnable { applyAndSave() }
+            handler.postDelayed(pendingApply!!, APPLY_DEBOUNCE_MS)
+        }
+
+        fun flushApply() {
+            pendingApply?.let {
+                handler.removeCallbacks(it)
+                pendingApply = null
+                applyAndSave()
+            }
+        }
+
+        // همگام‌سازی UI با مقادیر فعلی (بدون debounce)
+        fun syncSeekBars() {
+            seekSubSize.progress = (currentSize - 20).coerceIn(0, 80)
+            seekSubPos.progress = currentPos.coerceIn(0, 100)
+            seekSubBorder.progress = (currentBorder * 10).toInt().coerceIn(0, 60)
+            switchSubBold.isChecked = currentBold
+            switchAssOverride.isChecked = currentAssOverride
+        }
+
         // تنظیم مقادیر اولیه UI
-        seekSubSize.progress = (currentSize - 20).coerceIn(0, 80)
-        seekSubPos.progress = (currentPos - 20).coerceIn(0, 130)
-        seekSubBorder.progress = (currentBorder * 10).toInt().coerceIn(0, 60)
-        switchSubBold.isChecked = currentBold
-        switchAssOverride.isChecked = currentAssOverride
+        syncSeekBars()
+        updateLabels()
 
         spinnerSubColor.adapter = ArrayAdapter(
             context,
@@ -158,40 +191,48 @@ object SubtitleStyleManager {
             bgColors.indexOfFirst { it.hex.equals(currentBgColor, true) }.coerceAtLeast(0)
         )
 
-        syncAndSave()
+        // اعمال اولیه‌ی مقادیر ذخیره‌شده
+        applyAndSave()
 
-        // لیسنرها
+        // لیسنرهای اسلایدر: لیبل فوری، اعمال با debounce + اعمال قطعی هنگام رها کردن
         seekSubSize.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (!fromUser) return
                 currentSize = 20 + progress
-                syncAndSave()
+                updateLabels()
+                scheduleApply()
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) { flushApply() }
         })
 
         seekSubPos.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                currentPos = 20 + progress
-                syncAndSave()
+                if (!fromUser) return
+                currentPos = progress
+                updateLabels()
+                scheduleApply()
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) { flushApply() }
         })
 
         seekSubBorder.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (!fromUser) return
                 currentBorder = progress / 10.0
-                syncAndSave()
+                updateLabels()
+                scheduleApply()
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) { flushApply() }
         })
 
         spinnerSubColor.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
                 currentColor = textColors[position].hex
-                syncAndSave()
+                updateLabels()
+                applyAndSave()
             }
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
@@ -199,19 +240,20 @@ object SubtitleStyleManager {
         spinnerSubBgColor.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
                 currentBgColor = bgColors[position].hex
-                syncAndSave()
+                updateLabels()
+                applyAndSave()
             }
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
         switchSubBold.setOnCheckedChangeListener { _, isChecked ->
             currentBold = isChecked
-            syncAndSave()
+            applyAndSave()
         }
 
         switchAssOverride.setOnCheckedChangeListener { _, isChecked ->
             currentAssOverride = isChecked
-            syncAndSave()
+            applyAndSave()
         }
 
         AlertDialog.Builder(context)
@@ -226,9 +268,14 @@ object SubtitleStyleManager {
                 currentColor = DEFAULT_COLOR
                 currentBgColor = DEFAULT_BG_COLOR
                 currentAssOverride = DEFAULT_ASS_OVERRIDE
-                syncAndSave()
+                syncSeekBars()
+                updateLabels()
+                applyAndSave()
             }
-            .setOnDismissListener { onDismiss() }
+            .setOnDismissListener {
+                flushApply()
+                onDismiss()
+            }
             .create()
             .show()
     }
