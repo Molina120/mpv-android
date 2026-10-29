@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:paddingHorizontal="20dp"
+    android:paddingVertical="12dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/switchSkipEnabled"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            android:checked="true"
+            android:text="فعال‌سازی پرش خودکار زمانی"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="4dp"
+            android:text="بازه‌های زمانی را وارد کنید (فرمت HH:MM:SS-HH:MM:SS):" />
+
+        <EditText
+            android:id="@+id/editSkipRanges"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:gravity="top|start"
+            android:hint="00:00:00-00:30:30,+00:31:15-00:31:30"
+            android:inputType="textMultiLine|textNoSuggestions"
+            android:layoutDirection="ltr"
+            android:maxLines="8"
+            android:minLines="4"
+            android:scrollbars="vertical"
+            android:textDirection="ltr"
+            android:textSize="14sp" />
+
+        <RadioGroup
+            android:id="@+id/radioGroupSkipMode"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp">
+
+            <RadioButton
+                android:id="@+id/radioSkipInside"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:checked="true"
+                android:text="پرش از شروع بازه به پایان بازه (رد کردن بازه‌ها)" />
+
+            <RadioButton
+                android:id="@+id/radioKeepOnly"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="پخش فقط این بازه‌ها (رد کردن فاصله بین بازه‌ها)" />
+        </RadioGroup>
+
+        <TextView
+            android:id="@+id/txtSkipStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:textSize="12sp" />
+
+    </LinearLayout>
+</ScrollView>

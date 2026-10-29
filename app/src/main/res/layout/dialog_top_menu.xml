@@ -28,6 +28,30 @@
             android:textAllCaps="false" />
     </TableRow>
 
+    <!-- ردیف جدید: شخصی‌سازی زیرنویس و پرش خودکار زمانی -->
+    <TableRow
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content">
+
+        <Button
+            android:id="@+id/subStyleBtn"
+            style="@style/Widget.AppCompat.Button.Borderless"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="شخصی‌سازی زیرنویس"
+            android:textAllCaps="false" />
+
+        <Button
+            android:id="@+id/skipRangesBtn"
+            style="@style/Widget.AppCompat.Button.Borderless"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="پرش خودکار زمانی"
+            android:textAllCaps="false" />
+    </TableRow>
+
     <Button
         android:id="@+id/playlistBtn"
         style="@style/Widget.AppCompat.Button.Borderless"

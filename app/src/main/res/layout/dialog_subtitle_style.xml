@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:paddingHorizontal="20dp"
+    android:paddingVertical="12dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <!-- اندازه فونت -->
+        <TextView
+            android:id="@+id/txtSubSize"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="اندازه زیرنویس: 55"
+            android:textStyle="bold" />
+
+        <SeekBar
+            android:id="@+id/seekSubSize"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:layout_marginBottom="12dp"
+            android:max="80" />
+
+        <!-- ارتفاع / موقعیت عمودی -->
+        <TextView
+            android:id="@+id/txtSubPos"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="موقعیت عمودی (ارتفاع): 100%"
+            android:textStyle="bold" />
+
+        <SeekBar
+            android:id="@+id/seekSubPos"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:layout_marginBottom="12dp"
+            android:max="130" />
+
+        <!-- ضخامت حاشیه و سایه -->
+        <TextView
+            android:id="@+id/txtSubBorder"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="ضخامت حاشیه (Outline): 3.0"
+            android:textStyle="bold" />
+
+        <SeekBar
+            android:id="@+id/seekSubBorder"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:layout_marginBottom="12dp"
+            android:max="60" />
+
+        <!-- رنگ متن زیرنویس -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="رنگ متن زیرنویس:"
+            android:textStyle="bold" />
+
+        <Spinner
+            android:id="@+id/spinnerSubColor"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:layout_marginBottom="12dp" />
+
+        <!-- رنگ پس‌زمینه زیرنویس -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="کادر پس‌زمینه زیرنویس:"
+            android:textStyle="bold" />
+
+        <Spinner
+            android:id="@+id/spinnerSubBgColor"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:layout_marginBottom="12dp" />
+
+        <!-- برجسته کردن (Bold) -->
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/switchSubBold"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            android:text="برجسته کردن متن (Bold)" />
+
+        <!-- اعمال روی زیرنویس‌های ASS -->
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/switchAssOverride"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="اعمال اجباری فونت و استایل روی زیرنویس‌های ASS" />
+
+    </LinearLayout>
+</ScrollView>

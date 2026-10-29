@@ -112,6 +112,9 @@ internal class MPVView(context: Context, attrs: AttributeSet) : BaseMPVView(cont
         val screenshotDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
         screenshotDir.mkdirs()
         MPVLib.setOptionString("screenshot-directory", screenshotDir.path)
+
+        // اعمال تنظیمات ذخیره شده زیرنویس
+        SubtitleStyleManager.applyInitialOptions(context)
     }
 
     override fun postInitOptions() {

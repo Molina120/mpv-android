@@ -1412,6 +1412,14 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
                         restoreState()
                     }; false
                 },
+                MenuItem(R.id.subStyleBtn) {
+                    SubtitleStyleManager.showStyleDialog(this, restoreState)
+                    false
+                },
+                MenuItem(R.id.skipRangesBtn) {
+                    SkipRangeManager.showSkipDialog(this, restoreState)
+                    false
+                },
                 MenuItem(R.id.playlistBtn) {
                     openPlaylistMenu(restoreState); false
                 },
@@ -1705,6 +1713,14 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         }
         if (!userIsOperatingSeekbar)
             binding.playbackSeekbar.progress = position * SEEK_BAR_PRECISION
+
+        // بررسی بازه‌های پرش خودکار زمانی
+        if (!userIsOperatingSeekbar) {
+            SkipRangeManager.checkAndSkipIfNeeded(position) { targetSec ->
+                player.timePos = targetSec
+                showToast("پرش خودکار به ${Utils.prettyTime(targetSec.roundToInt())}", true)
+            }
+        }
 
         // Note: do NOT add other update functions here just because this is called every second.
         // Use property observation instead.
