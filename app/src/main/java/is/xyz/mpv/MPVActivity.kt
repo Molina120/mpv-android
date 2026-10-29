@@ -1397,6 +1397,53 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             MPVLib.command(arrayOf(cmd, path2, "cached"))
         }
 
+        /**
+         * لود زیرنویس خارجی با نرمالایز کردن علائم نگارشی فارسی (برای فایل‌های SRT).
+         * اگر فایل SRT باشد، نسخه نرمالایزشده در کش ذخیره و لود می‌شود؛
+         * در غیر این صورت فایل اصلی لود می‌شود.
+         */
+        fun addExternalSubtitle(result: Int, data: Intent?) {
+            if (result != RESULT_OK)
+                return
+            val path = data!!.getStringExtra("path")!!
+            val path2 = if (path.startsWith("content://"))
+                translateContentUri(Uri.parse(path))
+            else
+                path
+
+            val finalPath = try {
+                // فقط فایل‌های .srt نرمالایز می‌شوند
+                if (path2.endsWith(".srt", ignoreCase = true)) {
+                    val original = java.io.File(path2)
+                    if (original.exists() && original.canRead()) {
+                        val content = original.readText(Charsets.UTF_8)
+                        val normalized = SubtitleNormalizer.normalizeSrt(content)
+                        // فقط اگر تغییری کرد، فایل موقت بساز
+                        if (normalized != content) {
+                            val tmpDir = java.io.File(cacheDir, "normalized_subs")
+                            tmpDir.mkdirs()
+                            // نام یکتا بر اساس هش مسیر اصلی
+                            val tmpName = "norm_${path2.hashCode().toString(16)}.srt"
+                            val tmpFile = java.io.File(tmpDir, tmpName)
+                            tmpFile.writeText(normalized, Charsets.UTF_8)
+                            tmpFile.absolutePath
+                        } else {
+                            path2
+                        }
+                    } else {
+                        path2
+                    }
+                } else {
+                    path2
+                }
+            } catch (e: Exception) {
+                // در صورت هر خطایی، فایل اصلی لود شود
+                path2
+            }
+
+            MPVLib.command(arrayOf("sub-add", finalPath, "cached"))
+        }
+
         /******/
         val hiddenButtons = mutableSetOf<Int>()
         val buttons: MutableList<MenuItem> = mutableListOf(
@@ -1408,7 +1455,7 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
                 },
                 MenuItem(R.id.subBtn) {
                     openFilePickerFor(RCODE_EXTERNAL_SUB, R.string.open_external_sub) { result, data ->
-                        addExternalThing("sub-add", result, data)
+                        addExternalSubtitle(result, data)
                         restoreState()
                     }; false
                 },
@@ -1716,6 +1763,8 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
 
         // بررسی بازه‌های پرش خودکار زمانی
         if (!userIsOperatingSeekbar) {
+            // اطمینان از لود تنظیمات ذخیره‌شده (فقط بار اول)
+            SkipRangeManager.loadFromPrefs(this)
             SkipRangeManager.checkAndSkipIfNeeded(position) { targetSec ->
                 player.timePos = targetSec
                 showToast(getString(R.string.skip_toast, Utils.prettyTime(targetSec.roundToInt())), true)

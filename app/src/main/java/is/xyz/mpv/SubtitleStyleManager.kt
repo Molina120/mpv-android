@@ -70,11 +70,30 @@ object SubtitleStyleManager {
         MPVLib.setOptionString("sub-color", color)
         MPVLib.setOptionString("sub-back-color", bgColor)
         MPVLib.setOptionString("sub-ass-override", if (assOverride) "force" else "yes")
+        // باکس پس‌زمینه: اگر رنگ غیرشفاف است، BorderStyle=3 لازم است
+        try {
+            if (bgColor.equals("#00000000", ignoreCase = true)) {
+                MPVLib.setOptionString("sub-ass-style-overrides", "")
+            } else {
+                MPVLib.setOptionString("sub-ass-style-overrides", "BorderStyle=3")
+            }
+        } catch (e: Exception) {
+            // نادیده بگیر
+        }
     }
 
     /**
-     * اعمال آنی تغییرات در حین پخش ویدیو
+     * اعمال آنی تغییرات در حین پخش ویدیو — فقط پراپرتی‌هایی که واقعاً عوض شدن
+     * (ست کردن بی‌جهت sub-ass-override باعث ریلود زیرنویس و قفل شدن UI می‌شد)
      */
+    private var lastSize: Int? = null
+    private var lastPos: Int? = null
+    private var lastBorder: Double? = null
+    private var lastBold: Boolean? = null
+    private var lastColor: String? = null
+    private var lastBgColor: String? = null
+    private var lastAssOverride: Boolean? = null
+
     private fun applyLiveProperties(
         size: Int,
         pos: Int,
@@ -82,16 +101,66 @@ object SubtitleStyleManager {
         bold: Boolean,
         color: String,
         bgColor: String,
-        assOverride: Boolean
+        assOverride: Boolean,
+        forceAll: Boolean = false
     ) {
-        MPVLib.setPropertyString("sub-font", FontInstaller.FONT_FAMILY)
-        MPVLib.setPropertyInt("sub-font-size", size)
-        MPVLib.setPropertyInt("sub-pos", pos)
-        MPVLib.setPropertyDouble("sub-border-size", border)
-        MPVLib.setPropertyBoolean("sub-bold", bold)
-        MPVLib.setPropertyString("sub-color", color)
-        MPVLib.setPropertyString("sub-back-color", bgColor)
-        MPVLib.setPropertyString("sub-ass-override", if (assOverride) "force" else "yes")
+        if (forceAll || lastSize != size) {
+            MPVLib.setPropertyInt("sub-font-size", size)
+            lastSize = size
+        }
+        if (forceAll || lastPos != pos) {
+            MPVLib.setPropertyInt("sub-pos", pos)
+            lastPos = pos
+        }
+        if (forceAll || lastBorder != border) {
+            MPVLib.setPropertyDouble("sub-border-size", border)
+            lastBorder = border
+        }
+        if (forceAll || lastBold != bold) {
+            MPVLib.setPropertyBoolean("sub-bold", bold)
+            lastBold = bold
+        }
+        if (forceAll || lastColor != color) {
+            MPVLib.setPropertyString("sub-color", color)
+            lastColor = color
+        }
+        if (forceAll || lastBgColor != bgColor) {
+            MPVLib.setPropertyString("sub-back-color", bgColor)
+            applyBackgroundBoxStyle(bgColor)
+            lastBgColor = bgColor
+        }
+        if (forceAll || lastAssOverride != assOverride) {
+            MPVLib.setPropertyString("sub-ass-override", if (assOverride) "force" else "yes")
+            lastAssOverride = assOverride
+        }
+        // sub-font ثابت است؛ فقط در applyInitialOptions ست می‌شود
+    }
+
+    /**
+     * برای اینکه کادر پس‌زمینه واقعاً به‌صورت باکس دیده شود، libass باید
+     * BorderStyle=3 (opaque box) داشته باشد؛ در غیر این صورت فقط سایه رنگ می‌گیرد.
+     */
+    private fun applyBackgroundBoxStyle(bgColor: String) {
+        try {
+            if (bgColor.equals("#00000000", ignoreCase = true)) {
+                MPVLib.setPropertyString("sub-ass-style-overrides", "")
+            } else {
+                MPVLib.setPropertyString("sub-ass-style-overrides", "BorderStyle=3")
+            }
+        } catch (e: Exception) {
+            // اگر این پراپرتی در این نسخه پشتیبانی نشود، نادیده بگیر
+        }
+    }
+
+    /** کش را ریست کن تا اعمال بعدی همه‌چیز را ست کند (مثلاً هنگام باز شدن دیالوگ) */
+    private fun resetCache() {
+        lastSize = null
+        lastPos = null
+        lastBorder = null
+        lastBold = null
+        lastColor = null
+        lastBgColor = null
+        lastAssOverride = null
     }
 
     fun showStyleDialog(context: Context, onDismiss: () -> Unit) {
@@ -116,6 +185,9 @@ object SubtitleStyleManager {
         var currentColor = prefs.getString(PREF_SUB_COLOR, DEFAULT_COLOR) ?: DEFAULT_COLOR
         var currentBgColor = prefs.getString(PREF_SUB_BG_COLOR, DEFAULT_BG_COLOR) ?: DEFAULT_BG_COLOR
         var currentAssOverride = prefs.getBoolean(PREF_SUB_ASS_OVERRIDE, DEFAULT_ASS_OVERRIDE)
+
+        // کش را ریست کن تا اعمال اولیه همه‌چیز را ست کند
+        resetCache()
 
         // فقط لیبل‌ها را به‌روز کن (بدون تماس با mpv)
         fun updateLabels() {

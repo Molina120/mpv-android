@@ -7,6 +7,7 @@ import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.SwitchCompat
 import androidx.core.widget.doAfterTextChanged
+import androidx.preference.PreferenceManager
 
 object SkipRangeManager {
     data class TimeRange(val startSec: Double, val endSec: Double)
@@ -16,15 +17,57 @@ object SkipRangeManager {
         PLAY_ONLY_SPECIFIED_RANGES // پخش فقط بازه‌های مشخص شده و پرش از فواصل بین آن‌ها
     }
 
+    // کلیدهای SharedPreferences برای ماندگاری بعد از بستن برنامه
+    private const val PREF_SKIP_ENABLED = "skip_enabled"
+    private const val PREF_SKIP_MODE = "skip_mode"
+    private const val PREF_SKIP_RANGES_TEXT = "skip_ranges_text"
+
     var isEnabled: Boolean = true
     var mode: SkipMode = SkipMode.SKIP_SPECIFIED_RANGES
     var rawInputText: String = ""
         private set
     private var ranges: List<TimeRange> = emptyList()
+    private var prefsLoaded = false
 
     // جلوگیری از ارسال دستورات Seek تکراری در کسری از ثانیه
     private var lastSeekTimestampMs: Long = 0L
     private const val SEEK_COOLDOWN_MS = 900L
+
+    /**
+     * بارگذاری تنظیمات ذخیره‌شده از SharedPreferences.
+     * فقط یک بار در هر session اجرا می‌شود؛ بعد از آن مقادیر در حافظه هستند.
+     */
+    fun loadFromPrefs(context: Context) {
+        if (prefsLoaded) return
+        prefsLoaded = true
+        try {
+            val prefs = PreferenceManager.getDefaultSharedPreferences(context)
+            isEnabled = prefs.getBoolean(PREF_SKIP_ENABLED, true)
+            val modeName = prefs.getString(PREF_SKIP_MODE, SkipMode.SKIP_SPECIFIED_RANGES.name)
+            mode = try {
+                SkipMode.valueOf(modeName ?: SkipMode.SKIP_SPECIFIED_RANGES.name)
+            } catch (e: Exception) {
+                SkipMode.SKIP_SPECIFIED_RANGES
+            }
+            rawInputText = prefs.getString(PREF_SKIP_RANGES_TEXT, "") ?: ""
+            ranges = parseRanges(rawInputText)
+        } catch (e: Exception) {
+            // در صورت خطا، مقادیر پیش‌فرض باقی می‌مانند
+        }
+    }
+
+    /** ذخیره تنظیمات در SharedPreferences تا بعد از بستن برنامه باقی بمانند */
+    private fun saveToPrefs(context: Context) {
+        try {
+            PreferenceManager.getDefaultSharedPreferences(context).edit()
+                .putBoolean(PREF_SKIP_ENABLED, isEnabled)
+                .putString(PREF_SKIP_MODE, mode.name)
+                .putString(PREF_SKIP_RANGES_TEXT, rawInputText)
+                .apply()
+        } catch (e: Exception) {
+            // نادیده بگیر
+        }
+    }
 
     /**
      * تبدیل اعداد فارسی/عربی به انگلیسی و پارس کردن رشته بازه‌ها
@@ -128,6 +171,9 @@ object SkipRangeManager {
     }
 
     fun showSkipDialog(context: Context, onDismiss: () -> Unit) {
+        // بارگذاری مقادیر ذخیره‌شده (اگر قبلاً لود نشده)
+        loadFromPrefs(context)
+
         val view = LayoutInflater.from(context).inflate(R.layout.dialog_skip_ranges, null)
         val switchSkipEnabled = view.findViewById<SwitchCompat>(R.id.switchSkipEnabled)
         val editSkipRanges = view.findViewById<EditText>(R.id.editSkipRanges)
@@ -171,9 +217,13 @@ object SkipRangeManager {
                     SkipMode.PLAY_ONLY_SPECIFIED_RANGES
                 }
                 lastSeekTimestampMs = 0L
+                // ذخیره دائمی تا بعد از بستن برنامه باقی بماند
+                saveToPrefs(context)
             }
             .setNeutralButton(R.string.skip_clear) { _, _ ->
                 clear()
+                // پاکسازی را هم ذخیره کن
+                saveToPrefs(context)
             }
             .setNegativeButton(R.string.dialog_cancel, null)
             .setOnDismissListener { onDismiss() }
