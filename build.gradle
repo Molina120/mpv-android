@@ -2,6 +2,8 @@
 buildscript {
     ext.kotlin_version = '2.2.21'
     repositories {
+        // Local mirror (curl-built) - file:// repo, no network needed
+        maven { url "file:///home/hatch/workspace/tools/maven-mirror" }
         mavenCentral()
         google()
     }
@@ -13,6 +15,8 @@ buildscript {
 
 allprojects {
     repositories {
+        // Local mirror (curl-built) - file:// repo, no network needed
+        maven { url "file:///home/hatch/workspace/tools/maven-mirror" }
         mavenCentral()
         google()
     }
