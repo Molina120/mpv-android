@@ -72,11 +72,11 @@ object SubtitleStyleManager {
         MPVLib.setOptionString("sub-ass-override", if (assOverride) "force" else "yes")
         // باکس پس‌زمینه: اگر رنگ غیرشفاف است، BorderStyle=3 لازم است
         try {
-            if (bgColor.equals("#00000000", ignoreCase = true)) {
-                MPVLib.setOptionString("sub-ass-style-overrides", "")
-            } else {
-                MPVLib.setOptionString("sub-ass-style-overrides", "BorderStyle=3")
-            }
+            val style = if (bgColor.equals("#00000000", ignoreCase = true)) "" else "BorderStyle=3"
+            MPVLib.setOptionString("sub-ass-style-overrides", style)
+            try {
+                MPVLib.setOptionString("ass-style-overrides", style)
+            } catch (e: Exception) { }
         } catch (e: Exception) {
             // نادیده بگیر
         }
@@ -142,11 +142,13 @@ object SubtitleStyleManager {
      */
     private fun applyBackgroundBoxStyle(bgColor: String) {
         try {
-            if (bgColor.equals("#00000000", ignoreCase = true)) {
-                MPVLib.setPropertyString("sub-ass-style-overrides", "")
-            } else {
-                MPVLib.setPropertyString("sub-ass-style-overrides", "BorderStyle=3")
-            }
+            val style = if (bgColor.equals("#00000000", ignoreCase = true)) "" else "BorderStyle=3"
+            // نام جدید (mpv جدید)
+            MPVLib.setPropertyString("sub-ass-style-overrides", style)
+            // نام قدیمی (سازگاری با نسخه‌های قدیمی‌تر)
+            try {
+                MPVLib.setPropertyString("ass-style-overrides", style)
+            } catch (e: Exception) { }
         } catch (e: Exception) {
             // اگر این پراپرتی در این نسخه پشتیبانی نشود، نادیده بگیر
         }
