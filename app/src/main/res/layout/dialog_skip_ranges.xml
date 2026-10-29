@@ -2,6 +2,7 @@
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
+    android:layoutDirection="rtl"
     android:paddingHorizontal="20dp"
     android:paddingVertical="12dp">
 
@@ -34,8 +35,8 @@
             android:hint="00:00:00-00:30:30,+00:31:15-00:31:30"
             android:inputType="textMultiLine|textNoSuggestions"
             android:layoutDirection="ltr"
-            android:maxLines="8"
-            android:minLines="4"
+            android:maxLines="4"
+            android:minLines="2"
             android:scrollbars="vertical"
             android:textDirection="ltr"
             android:textSize="14sp" />
