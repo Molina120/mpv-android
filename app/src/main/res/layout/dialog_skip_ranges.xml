@@ -17,14 +17,14 @@
             android:layout_height="wrap_content"
             android:layout_marginBottom="8dp"
             android:checked="true"
-            android:text="فعال‌سازی پرش خودکار زمانی"
+            android:text="@string/skip_enabled"
             android:textStyle="bold" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginBottom="4dp"
-            android:text="بازه‌های زمانی را وارد کنید (فرمت HH:MM:SS-HH:MM:SS):" />
+            android:text="@string/skip_hint_label" />
 
         <EditText
             android:id="@+id/editSkipRanges"
@@ -52,13 +52,13 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:checked="true"
-                android:text="پرش از شروع بازه به پایان بازه (رد کردن بازه‌ها)" />
+                android:text="@string/skip_mode_inside" />
 
             <RadioButton
                 android:id="@+id/radioKeepOnly"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="پخش فقط این بازه‌ها (رد کردن فاصله بین بازه‌ها)" />
+                android:text="@string/skip_mode_keep" />
         </RadioGroup>
 
         <TextView

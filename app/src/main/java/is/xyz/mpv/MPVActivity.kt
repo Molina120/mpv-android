@@ -1718,7 +1718,7 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         if (!userIsOperatingSeekbar) {
             SkipRangeManager.checkAndSkipIfNeeded(position) { targetSec ->
                 player.timePos = targetSec
-                showToast("پرش خودکار به ${Utils.prettyTime(targetSec.roundToInt())}", true)
+                showToast(getString(R.string.skip_toast, Utils.prettyTime(targetSec.roundToInt())), true)
             }
         }
 

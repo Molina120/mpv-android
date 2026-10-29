@@ -30,23 +30,23 @@ object SubtitleStyleManager {
     // حداقل تأخیر بین دو اعمال متوالی روی mpv (جلوگیری از قفل شدن UI هنگام درگ)
     private const val APPLY_DEBOUNCE_MS = 250L
 
-    data class ColorOption(val name: String, val hex: String)
+    data class ColorOption(val nameRes: Int, val hex: String)
 
     private val textColors = listOf(
-        ColorOption("سفید (پیش‌فرض)", "#FFFFFF"),
-        ColorOption("زرد", "#FFFF00"),
-        ColorOption("طلایی", "#FFD700"),
-        ColorOption("فیروزه‌ای", "#00FFFF"),
-        ColorOption("سبز روشن", "#00FF66"),
-        ColorOption("نارنجی", "#FFA500"),
-        ColorOption("صورتی", "#FF69B4")
+        ColorOption(R.string.color_white_default, "#FFFFFF"),
+        ColorOption(R.string.color_yellow, "#FFFF00"),
+        ColorOption(R.string.color_gold, "#FFD700"),
+        ColorOption(R.string.color_cyan, "#00FFFF"),
+        ColorOption(R.string.color_light_green, "#00FF66"),
+        ColorOption(R.string.color_orange, "#FFA500"),
+        ColorOption(R.string.color_pink, "#FF69B4")
     )
 
     private val bgColors = listOf(
-        ColorOption("بدون کادر پس‌زمینه (شفاف)", "#00000000"),
-        ColorOption("مشکی نیمه‌شفاف (۵۰٪)", "#80000000"),
-        ColorOption("مشکی تیره (۷۵٪)", "#BF000000"),
-        ColorOption("مشکی کامل (۱۰۰٪)", "#FF000000")
+        ColorOption(R.string.bg_transparent, "#00000000"),
+        ColorOption(R.string.bg_semi_50, "#80000000"),
+        ColorOption(R.string.bg_dark_75, "#BF000000"),
+        ColorOption(R.string.bg_solid_100, "#FF000000")
     )
 
     /**
@@ -119,9 +119,9 @@ object SubtitleStyleManager {
 
         // فقط لیبل‌ها را به‌روز کن (بدون تماس با mpv)
         fun updateLabels() {
-            txtSubSize.text = "اندازه زیرنویس: $currentSize"
-            txtSubPos.text = "موقعیت عمودی: $currentPos (۰=بالا، ۱۰۰=پایین)"
-            txtSubBorder.text = "ضخامت حاشیه (Outline): ${"%.1f".format(currentBorder)}"
+            txtSubSize.text = context.getString(R.string.subtitle_size_label, currentSize)
+            txtSubPos.text = context.getString(R.string.subtitle_pos_label, currentPos)
+            txtSubBorder.text = context.getString(R.string.subtitle_border_label, currentBorder)
         }
 
         // اعمال روی mpv + ذخیره در prefs
@@ -176,7 +176,7 @@ object SubtitleStyleManager {
         spinnerSubColor.adapter = ArrayAdapter(
             context,
             android.R.layout.simple_spinner_dropdown_item,
-            textColors.map { it.name }
+            textColors.map { context.getString(it.nameRes) }
         )
         spinnerSubColor.setSelection(
             textColors.indexOfFirst { it.hex.equals(currentColor, true) }.coerceAtLeast(0)
@@ -185,7 +185,7 @@ object SubtitleStyleManager {
         spinnerSubBgColor.adapter = ArrayAdapter(
             context,
             android.R.layout.simple_spinner_dropdown_item,
-            bgColors.map { it.name }
+            bgColors.map { context.getString(it.nameRes) }
         )
         spinnerSubBgColor.setSelection(
             bgColors.indexOfFirst { it.hex.equals(currentBgColor, true) }.coerceAtLeast(0)
@@ -257,7 +257,7 @@ object SubtitleStyleManager {
         }
 
         AlertDialog.Builder(context)
-            .setTitle("شخصی‌سازی زیرنویس")
+            .setTitle(R.string.subtitle_style_title)
             .setView(view)
             .setPositiveButton(R.string.dialog_ok) { dialog, _ -> dialog.dismiss() }
             .setNeutralButton(R.string.dialog_reset) { _, _ ->

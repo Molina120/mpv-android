@@ -190,4 +190,40 @@
     <!-- File picker -->
     <string name="nnf_name">نام</string>
     <string name="nnf_permission_external_write_denied">اجازهٔ دسترسی به سامانهٔ پرونده داده نشد</string>
+
+    <!-- Subtitle style dialog (IranSans mod) -->
+    <string name="subtitle_style_title">شخصی‌سازی زیرنویس</string>
+    <string name="subtitle_size_label">اندازه زیرنویس: %1$d</string>
+    <string name="subtitle_pos_label">موقعیت عمودی: %1$d (۰=بالا، ۱۰۰=پایین)</string>
+    <string name="subtitle_border_label">ضخامت حاشیه (Outline): %1$.1f</string>
+    <string name="subtitle_text_color_label">رنگ متن زیرنویس:</string>
+    <string name="subtitle_bg_color_label">کادر پس‌زمینه زیرنویس:</string>
+    <string name="subtitle_bold">برجسته کردن متن (Bold)</string>
+    <string name="subtitle_ass_override">اعمال اجباری فونت و استایل روی زیرنویس‌های ASS</string>
+    <string name="color_white_default">سفید (پیش‌فرض)</string>
+    <string name="color_yellow">زرد</string>
+    <string name="color_gold">طلایی</string>
+    <string name="color_cyan">فیروزه‌ای</string>
+    <string name="color_light_green">سبز روشن</string>
+    <string name="color_orange">نارنجی</string>
+    <string name="color_pink">صورتی</string>
+    <string name="bg_transparent">بدون کادر پس‌زمینه (شفاف)</string>
+    <string name="bg_semi_50">مشکی نیمه‌شفاف (۵۰٪)</string>
+    <string name="bg_dark_75">مشکی تیره (۷۵٪)</string>
+    <string name="bg_solid_100">مشکی کامل (۱۰۰٪)</string>
+
+    <!-- Auto-skip ranges dialog (IranSans mod) -->
+    <string name="skip_title">پرش خودکار زمانی</string>
+    <string name="skip_enabled">فعال‌سازی پرش خودکار زمانی</string>
+    <string name="skip_hint_label">بازه‌های زمانی را وارد کنید (فرمت HH:MM:SS-HH:MM:SS):</string>
+    <string name="skip_mode_inside">پرش از شروع بازه به پایان بازه (رد کردن بازه‌ها)</string>
+    <string name="skip_mode_keep">پخش فقط این بازه‌ها (رد کردن فاصله بین بازه‌ها)</string>
+    <string name="skip_clear">پاکسازی</string>
+    <string name="skip_no_valid">هیچ بازه معتبری وارد نشده است.</string>
+    <string name="skip_valid_count">تعداد %1$d بازه زمانی معتبر شناسایی شد.</string>
+    <string name="skip_toast">پرش خودکار به %1$s</string>
+
+    <!-- Top menu buttons (IranSans mod) -->
+    <string name="menu_subtitle_style">شخصی‌سازی زیرنویس</string>
+    <string name="menu_skip_ranges">پرش خودکار زمانی</string>
 </resources>

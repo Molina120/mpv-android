@@ -147,9 +147,9 @@ object SkipRangeManager {
         fun updateStatusPreview(text: String) {
             val parsed = parseRanges(text)
             txtSkipStatus.text = if (parsed.isEmpty()) {
-                "هیچ بازه معتبری وارد نشده است."
+                context.getString(R.string.skip_no_valid)
             } else {
-                "تعداد ${parsed.size} بازه زمانی معتبر شناسایی شد."
+                context.getString(R.string.skip_valid_count, parsed.size)
             }
         }
 
@@ -159,7 +159,7 @@ object SkipRangeManager {
         }
 
         AlertDialog.Builder(context)
-            .setTitle("پرش خودکار زمانی")
+            .setTitle(R.string.skip_title)
             .setView(view)
             .setPositiveButton(R.string.dialog_save) { _, _ ->
                 isEnabled = switchSkipEnabled.isChecked
@@ -172,7 +172,7 @@ object SkipRangeManager {
                 }
                 lastSeekTimestampMs = 0L
             }
-            .setNeutralButton("پاکسازی") { _, _ ->
+            .setNeutralButton(R.string.skip_clear) { _, _ ->
                 clear()
             }
             .setNegativeButton(R.string.dialog_cancel, null)

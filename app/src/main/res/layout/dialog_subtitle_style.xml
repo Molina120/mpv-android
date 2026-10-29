@@ -16,7 +16,7 @@
             android:id="@+id/txtSubSize"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="اندازه زیرنویس: 55"
+            android:text="@string/subtitle_size_label"
             android:textStyle="bold" />
 
         <SeekBar
@@ -33,7 +33,7 @@
             android:id="@+id/txtSubPos"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="موقعیت عمودی: 100 (۰=بالا، ۱۰۰=پایین)"
+            android:text="@string/subtitle_pos_label"
             android:textStyle="bold" />
 
         <SeekBar
@@ -50,7 +50,7 @@
             android:id="@+id/txtSubBorder"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="ضخامت حاشیه (Outline): 3.0"
+            android:text="@string/subtitle_border_label"
             android:textStyle="bold" />
 
         <SeekBar
@@ -79,7 +79,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="رنگ متن زیرنویس:"
+                    android:text="@string/subtitle_text_color_label"
                     android:textStyle="bold" />
 
                 <Spinner
@@ -98,7 +98,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="کادر پس‌زمینه زیرنویس:"
+                    android:text="@string/subtitle_bg_color_label"
                     android:textStyle="bold" />
 
                 <Spinner
@@ -115,7 +115,7 @@
             android:layout_height="wrap_content"
             android:layout_marginBottom="16dp"
             android:minHeight="48dp"
-            android:text="برجسته کردن متن (Bold)" />
+            android:text="@string/subtitle_bold" />
 
         <!-- اعمال روی زیرنویس‌های ASS -->
         <androidx.appcompat.widget.SwitchCompat
@@ -123,7 +123,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:minHeight="48dp"
-            android:text="اعمال اجباری فونت و استایل روی زیرنویس‌های ASS" />
+            android:text="@string/subtitle_ass_override" />
 
     </LinearLayout>
 </ScrollView>

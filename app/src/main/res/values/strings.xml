@@ -212,4 +212,40 @@
     <!-- File picker -->
     <string name="nnf_name">Name</string>
     <string name="nnf_permission_external_write_denied">Permission to access file system denied</string>
+
+    <!-- Subtitle style dialog (IranSans mod) -->
+    <string name="subtitle_style_title">Subtitle style</string>
+    <string name="subtitle_size_label">Subtitle size: %1$d</string>
+    <string name="subtitle_pos_label">Vertical position: %1$d (0=top, 100=bottom)</string>
+    <string name="subtitle_border_label">Outline thickness: %1$.1f</string>
+    <string name="subtitle_text_color_label">Subtitle text color:</string>
+    <string name="subtitle_bg_color_label">Subtitle background box:</string>
+    <string name="subtitle_bold">Bold text</string>
+    <string name="subtitle_ass_override">Force font and style on ASS subtitles</string>
+    <string name="color_white_default">White (default)</string>
+    <string name="color_yellow">Yellow</string>
+    <string name="color_gold">Gold</string>
+    <string name="color_cyan">Cyan</string>
+    <string name="color_light_green">Light green</string>
+    <string name="color_orange">Orange</string>
+    <string name="color_pink">Pink</string>
+    <string name="bg_transparent">No background (transparent)</string>
+    <string name="bg_semi_50">Semi-transparent black (50%)</string>
+    <string name="bg_dark_75">Dark black (75%)</string>
+    <string name="bg_solid_100">Solid black (100%)</string>
+
+    <!-- Auto-skip ranges dialog (IranSans mod) -->
+    <string name="skip_title">Auto-skip time ranges</string>
+    <string name="skip_enabled">Enable auto-skip</string>
+    <string name="skip_hint_label">Enter time ranges (HH:MM:SS-HH:MM:SS format):</string>
+    <string name="skip_mode_inside">Skip from range start to range end (skip ranges)</string>
+    <string name="skip_mode_keep">Play only these ranges (skip gaps between)</string>
+    <string name="skip_clear">Clear</string>
+    <string name="skip_no_valid">No valid time ranges entered.</string>
+    <string name="skip_valid_count">%1$d valid time ranges detected.</string>
+    <string name="skip_toast">Auto-skipped to %1$s</string>
+
+    <!-- Top menu buttons (IranSans mod) -->
+    <string name="menu_subtitle_style">Subtitle style</string>
+    <string name="menu_skip_ranges">Auto-skip ranges</string>
 </resources>
