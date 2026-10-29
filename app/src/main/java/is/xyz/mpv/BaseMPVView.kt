@@ -28,9 +28,6 @@ abstract class BaseMPVView(context: Context, attrs: AttributeSet) : SurfaceView(
 
         MPVLib.init()
 
-        // IranSans mod: per-file auto-skip watcher (started after init)
-        SkipManager.start()
-
         /* set hardcoded options */
         postInitOptions()
         // could mess up VO init before surfaceCreated() is called
@@ -50,9 +47,6 @@ abstract class BaseMPVView(context: Context, attrs: AttributeSet) : SurfaceView(
     fun destroy() {
         // Disable surface callbacks to avoid using uninitialized mpv state
         holder.removeCallback(this)
-
-        // IranSans mod: stop the skip watcher before mpv is torn down
-        SkipManager.stop()
 
         MPVLib.destroy()
     }

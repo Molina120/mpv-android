@@ -27,7 +27,6 @@ object FontInstaller {
             }
             MPVLib.setOptionString("sub-fonts-dir", fontsDir.absolutePath)
             MPVLib.setOptionString("sub-font", FONT_FAMILY)
-            SkipManager.appContext = context.applicationContext
         } catch (e: Exception) {
             Log.w(TAG, "failed to install subtitle font", e)
         }
