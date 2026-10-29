@@ -201,6 +201,8 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             topLockBtn.setOnClickListener { lockUI() }
             topPiPBtn.setOnClickListener { goIntoPiP() }
             topMenuBtn.setOnClickListener { openTopMenu() }
+            // IranSans mod: long-press the settings gear to edit auto-skip ranges
+            topMenuBtn.setOnLongClickListener { SkipManager.showEditor(this@MPVActivity); true }
             unlockBtn.setOnClickListener { unlockUI() }
             playbackDurationTxt.setOnClickListener {
                 useTimeRemaining = !useTimeRemaining

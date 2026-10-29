@@ -22,9 +22,14 @@ abstract class BaseMPVView(context: Context, attrs: AttributeSet) : SurfaceView(
         MPVLib.setOptionString("config-dir", configDir)
         for (opt in arrayOf("gpu-shader-cache-dir", "icc-cache-dir"))
             MPVLib.setOptionString(opt, cacheDir)
+        // IranSans mod: install subtitle font (must be before init())
+        FontInstaller.install(context)
         initOptions()
 
         MPVLib.init()
+
+        // IranSans mod: per-file auto-skip watcher (started after init)
+        SkipManager.start()
 
         /* set hardcoded options */
         postInitOptions()
@@ -45,6 +50,9 @@ abstract class BaseMPVView(context: Context, attrs: AttributeSet) : SurfaceView(
     fun destroy() {
         // Disable surface callbacks to avoid using uninitialized mpv state
         holder.removeCallback(this)
+
+        // IranSans mod: stop the skip watcher before mpv is torn down
+        SkipManager.stop()
 
         MPVLib.destroy()
     }

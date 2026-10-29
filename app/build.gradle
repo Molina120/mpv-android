@@ -11,6 +11,9 @@ android {
         minSdkVersion 23
         targetSdk 36
 
+        // Side-by-side with upstream: distinct app id so both can be installed
+        applicationId "is.xyz.mpv.iransans"
+
         versionCode 48
         versionName "2026-09-17-release"
 
