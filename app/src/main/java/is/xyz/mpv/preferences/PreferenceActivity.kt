@@ -110,6 +110,16 @@ class PreferenceActivity : AppCompatActivity(),
     class SettingsFragment : PreferenceFragmentCompat() {
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
             setPreferencesFromResource(R.xml.preferences_root, rootKey)
+
+            // اتصال مستقیم آیتم About به AboutActivity همین پکیج برای جلوگیری از کرش targetPackage
+            for (i in 0 until preferenceScreen.preferenceCount) {
+                val pref = preferenceScreen.getPreference(i)
+                if (pref.title == getString(R.string.pref_header_about_mpv) ||
+                    pref.intent?.component?.className?.endsWith("AboutActivity") == true
+                ) {
+                    pref.intent = android.content.Intent(requireContext(), AboutActivity::class.java)
+                }
+            }
         }
     }
 

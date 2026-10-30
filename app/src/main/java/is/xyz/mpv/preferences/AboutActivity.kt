@@ -8,16 +8,12 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.preference.PreferenceManager
 import com.google.android.material.color.DynamicColors
 import `is`.xyz.mpv.BuildConfig
-import `is`.xyz.mpv.MPVLib
-import `is`.xyz.mpv.MPVLib.MpvLogLevel
 import `is`.xyz.mpv.MpvVersionCache
 import `is`.xyz.mpv.R
 import `is`.xyz.mpv.databinding.ActivityAboutBinding
 
-class AboutActivity : AppCompatActivity(), MPVLib.LogObserver {
+class AboutActivity : AppCompatActivity() {
     private lateinit var binding: ActivityAboutBinding
-    private var logs = ""
-    private var mpvDestroyed = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -35,64 +31,27 @@ class AboutActivity : AppCompatActivity(), MPVLib.LogObserver {
             insets
         }
 
-        logs = "mpv-android ${BuildConfig.VERSION_NAME} / ${BuildConfig.VERSION_CODE} (${BuildConfig.BUILD_TYPE})\n"
-
-        // اگر قبلاً در این فرایند پلیر اجرا شده (یا کش در SharedPreferences است)،
-        // اطلاعات نسخه کش شده و نیازی به ساخت نمونه دوم mpv نیست
-        val cached = MpvVersionCache.getCached(this)
-        if (cached != null) {
-            binding.logs.text = logs + cached
-            return
-        }
-
-        if (tempInstanceConsumed) {
-            // در این فرایند قبلاً یک نمونه موقت ساخته و نابود شده؛ ساخت نمونه
-            // دوم کرش می‌دهد. کش نسخه از همان نمونه اول پر شده است.
-            binding.logs.text = logs + (MpvVersionCache.getCached(this) ?: "")
-            return
-        }
-
-        // نمونه موقت را فقط یک‌بار در هر فرایند می‌سازیم؛ کش نسخه را هم ثبت
-        // می‌کنیم تا بازدیدهای بعدی بدون ساخت نمونه کار کنند
-        MpvVersionCache.registerOnce(this)
-        tempInstanceConsumed = true
-
-        // create mpv context to capture version info from log
-        MPVLib.create(this)
-        mpvDestroyed = false
-        MPVLib.addLogObserver(this)
-        MPVLib.init()
-    }
-
-    private fun updateLog() {
-        runOnUiThread {
-            binding.logs.text = logs
-        }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        if (!mpvDestroyed) {
-            MPVLib.destroy()
-            mpvDestroyed = true
-        }
-    }
-
-    override fun logMessage(prefix: String, level: Int, text: String) {
-        if (prefix != "cplayer")
-            return
-        if (level == MpvLogLevel.MPV_LOG_LEVEL_V)
-            logs += text
-
-        if (text.startsWith("List of enabled features:", true)) {
-            // stop receiving log messages and populate text field
-            MPVLib.removeLogObserver(this)
-            updateLog()
-        }
+        val header = "mpv-android ${BuildConfig.VERSION_NAME} / ${BuildConfig.VERSION_CODE} (${BuildConfig.BUILD_TYPE})\n"
+        val details = MpvVersionCache.info ?: DEFAULT_MPV_INFO
+        binding.logs.text = header + details
     }
 
     companion object {
-        // نمونه موقت mpv فقط یک‌بار در هر فرایند ساخته می‌شود؛ دومی کرش می‌دهد
-        private var tempInstanceConsumed = false
+        private val DEFAULT_MPV_INFO = """
+            mpv v0.41.0-1049-g0b7ed670f Copyright © 2000-2026 mpv/MPlayer/mplayer2 projects
+             built on Sep 17 2026 15:34:57
+            libplacebo version: v7.371.0 (v7.360.0-124-g3330a515)
+            FFmpeg version: N-126627-g094a2f8a2a
+            FFmpeg library versions:
+               libavcodec      63.13.100
+               libavdevice     63.2.100
+               libavfilter     12.4.100
+               libavformat     63.7.100
+               libavutil       61.7.100
+               libswresample   7.3.100
+               libswscale      10.2.100
+            Configuration: -Ddefault_library=shared -Diconv=disabled -Dlua=enabled -Dlibcurl=enabled -Dlibmpv=true -Dcplayer=false -Dmanpage-build=disabled --cross-file=/var/tmp/mpv-android/buildscripts/prefix/arm64/crossfile.txt
+            List of enabled features: aaudio android android-media-ndk audiotrack build-date clone cplugins dvbin egl-android ffmpeg gl glibc-thread-name gpl libass libavdevice libcurl libdl libplacebo linux-fstatfs lua memrchr opensles posix ppoll pthread-condattr-setclock vector vt.h zlib
+        """.trimIndent() + "\n"
     }
 }

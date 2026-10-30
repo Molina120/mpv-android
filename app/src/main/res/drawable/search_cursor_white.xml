@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- کرسر سفید سرچ مرورگر؛ مستقل از تم تا همیشه روی تولبار بنفش دیده شود -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <size android:width="2dp" />
+    <solid android:color="#FFFFFF" />
+</shape>

@@ -168,6 +168,38 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             openFolder != null || searchMenuItem?.isActionViewExpanded == true
     }
 
+    /** فوکوس فیلد سرچ + کیبورد + کرسر سفید مرئی روی تولبار بنفش */
+    private fun focusSearchField(searchView: SearchView) {
+        if (!isAdded) return
+        val et = searchView.findViewById<EditText>(androidx.appcompat.R.id.search_src_text) ?: return
+        et.isFocusable = true
+        et.isFocusableInTouchMode = true
+        et.isCursorVisible = true
+        et.requestFocusFromTouch()
+        et.setTextColor(Color.WHITE)
+        et.setHintTextColor(Color.parseColor("#B3FFFFFF"))
+        ensureVisibleCursor(et)
+        val imm = requireContext().getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.showSoftInput(et, InputMethodManager.SHOW_IMPLICIT)
+    }
+
+    /** ست کردن صریح drawable کرسر تا به تم وابسته نباشد */
+    private fun ensureVisibleCursor(et: EditText) {
+        try {
+            val d = ContextCompat.getDrawable(requireContext(), R.drawable.search_cursor_white) ?: return
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                et.textCursorDrawable = d
+            } else {
+                val editorField = TextView::class.java.getDeclaredField("mEditor")
+                editorField.isAccessible = true
+                val editor = editorField.get(et)
+                val cursorField = editor.javaClass.getDeclaredField("mCursorDrawable")
+                cursorField.isAccessible = true
+                cursorField.set(editor, arrayOf(d, d))
+            }
+        } catch (_: Exception) { }
+    }
+
     private val videoPermission: String
         get() = if (Build.VERSION.SDK_INT >= 33)
             Manifest.permission.READ_MEDIA_VIDEO
@@ -251,13 +283,10 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         })
         searchItem.setOnActionExpandListener(object : MenuItem.OnActionExpandListener {
             override fun onMenuItemActionExpand(item: MenuItem): Boolean {
-                // فوکوس خودکار + باز شدن کیبورد (علامت چشمک‌زن تایپ)
-                searchView.post {
-                    val et = searchView.findViewById<EditText>(androidx.appcompat.R.id.search_src_text)
-                    (et ?: searchView).requestFocus()
-                    val imm = requireContext().getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-                    imm.showSoftInput(et ?: searchView, InputMethodManager.SHOW_IMPLICIT)
-                }
+                // فوکوس مطمئن + کیبورد + کرسر سفید مرئی (دو تلاش برای اطمینان از لِی‌اوت)
+                searchView.isIconified = false
+                searchView.post { focusSearchField(searchView) }
+                searchView.postDelayed({ focusSearchField(searchView) }, 150)
                 updateBackCallback()
                 return true
             }
