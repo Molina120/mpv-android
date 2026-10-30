@@ -9,11 +9,8 @@ import java.nio.charset.CodingErrorAction
 
 object SubtitleNormalizer {
 
-    private val PUNCT_CHARS = setOf('.', '!', '?', '؟', '،', ':', ';', '؛')
+    private val PUNCT_SET = setOf('.', '!', '?', '؟', '،', ':', ';', '؛')
 
-    /**
-     * بررسی، نرمالایز و ذخیره فایل برای تحویل مستقیم به mpv
-     */
     fun processSubtitlePath(context: Context, pathOrUri: String): String {
         try {
             val rawBytes: ByteArray? = if (pathOrUri.startsWith("content://")) {
@@ -26,7 +23,6 @@ object SubtitleNormalizer {
             if (rawBytes == null || rawBytes.isEmpty()) return pathOrUri
 
             val content = readSubtitleText(rawBytes)
-            // اگر ساختار زمانی زیرنویس SRT را ندارد، دست نزن
             if (!content.contains("-->")) return pathOrUri
 
             val fixedContent = normalizeSrt(content)
@@ -39,9 +35,6 @@ object SubtitleNormalizer {
         }
     }
 
-    /**
-     * خواندن متن با شناسایی خودکار UTF-8 ،UTF-16 و Windows-1256 (فارسی رایج)
-     */
     private fun readSubtitleText(bytes: ByteArray): String {
         if (bytes.size >= 3 && bytes[0] == 0xEF.toByte() && bytes[1] == 0xBB.toByte() && bytes[2] == 0xBF.toByte()) {
             return String(bytes, 3, bytes.size - 3, Charsets.UTF_8)
@@ -135,28 +128,44 @@ object SubtitleNormalizer {
         }
         if (!hasRtl) return line
 
-        // ۱. بررسی و جداسازی خط تیره محاوره‌ای در انتهای متن
+        // ۱. حل مشکل خط تیره دیالوگ در انتهای خطوط (مثل "- و...نوچ، فقط آبجو")
         var isDialogue = false
-        if (line.endsWith(" -")) {
+        val trailingDashRegex = Regex("[\\s\\u00A0\\u200C]*[-–—]+[\\s\\u00A0\\u200C]*$")
+        if (trailingDashRegex.containsMatchIn(line)) {
             isDialogue = true
-            line = line.substring(0, line.length - 2).trimEnd()
-        } else if (line.endsWith("-") && line.length > 1 && line[line.length - 2] != '-') {
+            line = line.replace(trailingDashRegex, "").trimEnd()
+        } else if (line.startsWith("-") || line.startsWith("–") || line.startsWith("—")) {
             isDialogue = true
-            line = line.substring(0, line.length - 1).trimEnd()
+            line = line.substring(1).trimStart()
         }
 
-        // ۲. اصلاح گیومه‌های نامتوازن شکسته شده بین دو خط
-        if (line.endsWith("»") && !line.startsWith("«")) {
+        // ۲. حل مشکل سه‌نقطه و علائم در ابتدای خطوط (تصاویر ۲۱ و ۲۲)
+        if (line.startsWith("...") || line.startsWith("…")) {
+            val prefix = if (line.startsWith("...")) "..." else "…"
+            line = line.substring(prefix.length).trimStart() + prefix
+        }
+
+        // ۳. حل مشکل ترکیب نقطه با گیومه مثل .«من هولوگرام نیستم» (تصویر ۲۴)
+        if (Regex("^[.!?؟،:;؛]+«").containsMatchIn(line)) {
+            val pMatch = Regex("^[.!?؟،:;؛]+").find(line)
+            if (pMatch != null) {
+                val punct = pMatch.value
+                line = line.substring(punct.length) + punct
+            }
+        }
+
+        // ۴. حل مشکل گیومه‌های نامتوازن در شکست خطوط
+        if (line.endsWith("»") && !line.contains("«")) {
             line = "«" + line.substring(0, line.length - 1)
-        } else if (line.startsWith("«") && !line.endsWith("»")) {
+        } else if (line.startsWith("«") && !line.contains("»")) {
             line = line.substring(1) + "»"
         }
 
-        // ۳. انتقال علائم ابتدایی خط به انتها
+        // ۵. انتقال سایر علائم نگارشی ابتدایی به انتها
         line = moveLeadingPunctToEnd(line)
 
-        // ۴. بازگرداندن خط تیره محاوره‌ای به ابتدای صحیح جمله
-        if (isDialogue && !line.startsWith("- ")) {
+        // ۶. برگرداندن خط تیره دیالوگ به ابتدای صحیح جمله
+        if (isDialogue) {
             line = "- $line"
         }
 
@@ -166,12 +175,8 @@ object SubtitleNormalizer {
     private fun moveLeadingPunctToEnd(s: String): String {
         if (s.isEmpty()) return s
 
-        val first = s[0]
-        if (first == '.' && s.length > 1 && s[1] == '.') return s // سه‌نقطه دست نخورد
-        if (first == '…') return s
-
         var pCount = 0
-        while (pCount < s.length && s[pCount] in PUNCT_CHARS) {
+        while (pCount < s.length && s[pCount] in PUNCT_SET) {
             pCount++
         }
         if (pCount == 0) return s

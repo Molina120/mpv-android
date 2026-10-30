@@ -366,6 +366,7 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
 
         // Suppress any further callbacks
         activityIsForeground = false
+        isSoftsubExtracted = false
 
         if (becomingNoisyReceiverRegistered) {
             unregisterReceiver(becomingNoisyReceiver)
@@ -2051,9 +2052,13 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
      * رهگیری خودکار زیرنویس‌ها: هر زیرنویس خارجی را نرمالایز و جایگزین می‌کند.
      * هنگام MPV_EVENT_FILE_LOADED فراخوانی می‌شود.
      */
+    private var isSoftsubExtracted = false
+
     private fun autoNormalizeSubtitles() {
         try {
             val count = MPVLib.getPropertyInt("track-list/count") ?: 0
+            var hasExternalSub = false
+
             for (i in 0 until count) {
                 val type = MPVLib.getPropertyString("track-list/$i/type") ?: continue
                 if (type != "sub") continue
@@ -2062,19 +2067,37 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
                 val trackId = MPVLib.getPropertyInt("track-list/$i/id") ?: continue
                 val isSelected = MPVLib.getPropertyBoolean("track-list/$i/selected") ?: false
 
-                // اگر فایل زیرنویس خارجی است و هنوز اصلاح نشده
-                if (!extFile.isNullOrEmpty() && !extFile.contains("norm_sub_")) {
-                    val normPath = SubtitleNormalizer.processSubtitlePath(applicationContext, extFile)
-                    if (normPath != extFile) {
-                        MPVLib.command(arrayOf("sub-remove", trackId.toString()))
-                        val flag = if (isSelected) "select" else "auto"
-                        MPVLib.command(arrayOf("sub-add", normPath, flag))
-                        break
+                // بررسی زیرنویس‌های خارجی
+                if (!extFile.isNullOrEmpty()) {
+                    hasExternalSub = true
+                    if (!extFile.contains("norm_sub_") && !extFile.contains("softsub_norm_")) {
+                        val normPath = SubtitleNormalizer.processSubtitlePath(applicationContext, extFile)
+                        if (normPath != extFile) {
+                            MPVLib.command(arrayOf("sub-remove", trackId.toString()))
+                            val flag = if (isSelected) "select" else "auto"
+                            MPVLib.command(arrayOf("sub-add", normPath, flag))
+                            return
+                        }
                     }
                 }
             }
+
+            // اگر هیچ زیرنویس خارجی وجود نداشت، سافت‌ساب داخلی ویدیو را استخراج و جایگزین کن
+            if (!hasExternalSub && !isSoftsubExtracted) {
+                val currentPath = MPVLib.getPropertyString("path") ?: return
+                isSoftsubExtracted = true
+
+                Thread {
+                    val extractedFile = EmbeddedSubExtractor.extractAndNormalize(applicationContext, currentPath)
+                    if (extractedFile != null && extractedFile.exists()) {
+                        runOnUiThread {
+                            MPVLib.command(arrayOf("sub-add", extractedFile.absolutePath, "select"))
+                        }
+                    }
+                }.start()
+            }
         } catch (e: Exception) {
-            Log.e("mpv", "Failed to auto-normalize subtitles", e)
+            Log.e(TAG, "Failed to auto-normalize subtitles", e)
         }
     }
 
