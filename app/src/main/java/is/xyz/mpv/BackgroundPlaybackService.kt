@@ -123,6 +123,7 @@ class BackgroundPlaybackService : Service(), MPVLib.EventObserver {
 
     override fun onStartCommand(intent: Intent, flags: Int, startId: Int): Int {
         Log.v(TAG, "BackgroundPlaybackService: starting")
+        isRunning = true
 
         cachedMetadata.readAll()
         paused = MPVLib.getPropertyBoolean("pause") == true
@@ -143,6 +144,7 @@ class BackgroundPlaybackService : Service(), MPVLib.EventObserver {
     }
 
     override fun onDestroy() {
+        isRunning = false
         MPVLib.removeObserver(this)
 
         thumbnailHandler.removeCallbacksAndMessages(null)
@@ -193,6 +195,10 @@ class BackgroundPlaybackService : Service(), MPVLib.EventObserver {
     companion object {
         /* thumbnail to display alongside the permanent notification */
         var thumbnail: Bitmap? = null
+        /** true وقتی سرویس پخش پس‌زمینه فعال است — موتور کمکی بندانگشتی نباید MPVLib را لمس کند */
+        @Volatile
+        var isRunning: Boolean = false
+            private set
         /* Set by MPVActivity; for connecting the notification to the media session */
         var mediaToken: MediaSessionCompat.Token? = null
         /* Set by MPVActivity; to notify on thumbnail changes */

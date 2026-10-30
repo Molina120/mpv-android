@@ -1,5 +1,6 @@
 package `is`.xyz.mpv
 
+import `is`.xyz.mpv.MPVLib.MpvEvent
 import `is`.xyz.mpv.preferences.PreferenceActivity
 import `is`.xyz.mpv.databinding.FragmentMainScreenBinding
 import android.Manifest
@@ -12,6 +13,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.SurfaceTexture
+import android.media.Image
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
@@ -25,7 +27,7 @@ import android.opengl.Matrix
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
-import android.os.Looper
+import android.os.HandlerThread
 import android.provider.MediaStore
 import android.util.Log
 import android.util.LruCache
@@ -54,6 +56,7 @@ import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import java.util.Collections
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.max
 
 /**
@@ -69,9 +72,9 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
     private lateinit var permissionLauncher: ActivityResultLauncher<String>
 
     private val scanner = Executors.newSingleThreadExecutor()
-    // تردپول مجزا و سریع برای خواندن فوری بندانگشتی‌های ذخیره‌شده از حافظه دائمی
+    // تردپول سریع برای خواندن فوری بندانگشتی‌های ذخیره‌شده از حافظه دائمی
     private val diskCacheExecutor = Executors.newFixedThreadPool(4)
-    // تردپول مجزا برای استخراج فریم ویدیوهای جدید (جلوگیری از اشباع دیکدر سخت‌افزاری)
+    // تردپول برای استخراج فریم ویدیوهای جدید
     private val thumbDecodeExecutor = Executors.newFixedThreadPool(2)
 
     /** وضعیت تماشا (به سبک MX Player) */
@@ -86,11 +89,49 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         override fun sizeOf(key: Long, value: Bitmap): Int = value.byteCount / 1024
     }
 
-    /** ویدیوهایی که در حال حاضر در صف ساخت بندانگشتی هستند (جلوگیری از پردازش تکراری) */
+    /** ویدیوهایی که در حال حاضر در صف ساخت بندانگشتی هستند */
     private val thumbInProgress = Collections.synchronizedSet(mutableSetOf<Long>())
 
     /** ویدیوهایی که ساخت بندانگشتی‌شان در این نشست ناموفق بود */
     private val thumbFailed = Collections.synchronizedSet(mutableSetOf<Long>())
+
+    /** شمارنده تسک‌های فعال برای بستن خودکار موتور کمکی mpv پس از اتمام ساخت بندانگشتی‌ها */
+    private val activeDecodeTasks = AtomicInteger(0)
+
+    /** قفل و وضعیت موتور کمکی MPVLib برای ویدیوهای 10-bit x265 و 4K HDR10+ */
+    private val mpvThumbLock = Object()
+    @Volatile
+    private var isPlayerActivityActive = false
+    private var mpvThumbActive = false
+    private var mpvThumbSurface: MpvOffscreenSurface? = null
+    private val mpvRestartSync = Object()
+    @Volatile
+    private var mpvPlaybackRestarted = false
+    @Volatile
+    private var mpvFileEnded = false
+
+    private val mpvThumbObserver = object : MPVLib.EventObserver {
+        override fun eventProperty(property: String) {}
+        override fun eventProperty(property: String, value: Long) {}
+        override fun eventProperty(property: String, value: Boolean) {}
+        override fun eventProperty(property: String, value: String) {}
+        override fun eventProperty(property: String, value: Double) {}
+        override fun event(eventId: Int) {
+            if (eventId == MpvEvent.MPV_EVENT_PLAYBACK_RESTART ||
+                eventId == MpvEvent.MPV_EVENT_VIDEO_RECONFIG
+            ) {
+                synchronized(mpvRestartSync) {
+                    mpvPlaybackRestarted = true
+                    mpvRestartSync.notifyAll()
+                }
+            } else if (eventId == MpvEvent.MPV_EVENT_END_FILE) {
+                synchronized(mpvRestartSync) {
+                    mpvFileEnded = true
+                    mpvRestartSync.notifyAll()
+                }
+            }
+        }
+    }
 
     private var folders: List<VideoScanner.Folder> = emptyList()
     private var openFolder: VideoScanner.Folder? = null
@@ -143,6 +184,14 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         }
         val sorted = videos.sortedWith(cmp)
         return if (sortDescending) sorted.reversed() else sorted
+    }
+
+    /** لیبل دکمه تغییر جهت، متناسب با نوع مرتب‌سازی */
+    private fun directionLabelRes(criterion: SortBy): Int = when (criterion) {
+        SortBy.TITLE -> if (sortDescending) R.string.sort_order_za else R.string.sort_order_az
+        SortBy.DATE -> if (sortDescending) R.string.sort_order_newest_first else R.string.sort_order_oldest_first
+        SortBy.DURATION -> if (sortDescending) R.string.sort_order_longest_first else R.string.sort_order_shortest_first
+        SortBy.SIZE -> if (sortDescending) R.string.sort_order_largest_first else R.string.sort_order_smallest_first
     }
 
     private val backCallback = object : OnBackPressedCallback(false) {
@@ -200,6 +249,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             }
         }
         playerLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+            isPlayerActivityActive = false
             Log.v(TAG, "returned from player ($it)")
         }
         permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -274,6 +324,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
 
     override fun onResume() {
         super.onResume()
+        isPlayerActivityActive = false
         if (hasPermission() && !loadedOnce &&
             binding.permissionView.isVisible) {
             loadVideos()
@@ -391,7 +442,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         }
     }
 
-    // ---------- مدیریت پیشرفته و دائمی بندانگشتی‌ها (پشتیبانی کامل از x265) ----------
+    // ---------- مدیریت پیشرفته و دائمی بندانگشتی‌ها (پشتیبانی از 10-bit x265 و 4K HDR10+) ----------
 
     /**
      * کش دیسک مشترک با پلیر (ThumbDiskCache — حافظه دائمی filesDir تا با بستن
@@ -400,25 +451,22 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
     private fun getDiskCacheFile(appCtx: Context, video: VideoScanner.Video): File =
         ThumbDiskCache.file(appCtx, video.id)
 
-    /** پیش‌بارگذاری بندانگشتی‌های موجود روی دیسک به درون رم برای نمایش آنی */
     private fun preloadDiskThumbnails(appCtx: Context, allFolders: List<VideoScanner.Folder>) {
         diskCacheExecutor.execute {
             for (folder in allFolders) {
                 for (video in folder.videos) {
                     if (thumbCache.get(video.id) != null) continue
-                    if (ThumbDiskCache.load(appCtx, video.id)?.let { thumbCache.put(video.id, it); true } == true) {
-                        continue
+                    ThumbDiskCache.load(appCtx, video.id)?.let { bmp ->
+                        thumbCache.put(video.id, bmp)
                     }
                 }
             }
         }
     }
 
-    /** بارگذاری بندانگشتی با اولویت: ۱. کش رم ۲. کش دیسک (فوری) ۳. استخراج و ذخیره دائمی */
     private fun loadThumb(video: VideoScanner.Video, imageView: ImageView) {
         imageView.tag = video.id
 
-        // ۱. اگر در رم است، بلافاصله بدون پرش تصویر ست شود
         thumbCache.get(video.id)?.let {
             imageView.setImageBitmap(it)
             return
@@ -430,7 +478,6 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         val appCtx = requireContext().applicationContext
         val cacheFile = getDiskCacheFile(appCtx, video)
 
-        // ۲. اگر فایل قبلاً روی دیسک ذخیره شده، در تردپول سریع دیسک (بدون انتظار در صف دیکد ویدیو) لود شود
         if (cacheFile.exists() && cacheFile.length() > 0L) {
             diskCacheExecutor.execute {
                 val cachedBmp = thumbCache.get(video.id)
@@ -442,7 +489,6 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                         if (imageView.tag == video.id) imageView.setImageBitmap(cachedBmp)
                     }
                 } else {
-                    // اگر فایل دیسک خراب بود، حذف و بازسازی شود
                     cacheFile.delete()
                     extractAndSaveThumb(appCtx, video, cacheFile, imageView)
                 }
@@ -450,7 +496,6 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             return
         }
 
-        // ۳. اگر روی دیسک نبود، استخراج و برای همیشه روی دیسک ذخیره شود
         extractAndSaveThumb(appCtx, video, cacheFile, imageView)
     }
 
@@ -460,26 +505,34 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         cacheFile: File,
         imageView: ImageView
     ) {
-        // جلوگیری از ارسال هم‌زمان چند تسک دیکد برای یک ویدیو
         if (!thumbInProgress.add(video.id)) return
+        activeDecodeTasks.incrementAndGet()
 
         thumbDecodeExecutor.execute {
             try {
-                // توجه: حتی اگر کاربر اسکرول کند، استخراج و ذخیره روی دیسک را متوقف نمی‌کنیم
-                // تا تصویر برای همیشه ذخیره شود و دفعه بعد از اول لود نشود.
+                // ۱. تلاش اول با MediaMetadataRetriever (سریع برای ویدیوهای ۸ بیتی استاندارد)
                 var rawBmp: Bitmap? = retrieverFrame(appCtx, video)
 
-                // اگر MediaMetadataRetriever شکست خورد (به‌ویژه در ویدیوهای x265 / HEVC 10-bit)
-                // از دیکدر مستقیم MediaCodec + سطح گرافیکی OpenGL استفاده می‌کنیم
+                // ۲. تلاش دوم با MediaCodec در حالت ByteBuffer پردازنده (پشتیبانی از 10-bit P010 و 8-bit)
                 if (rawBmp == null || isMostlyBlack(rawBmp)) {
-                    val codecBmp = decodeFrameWithMediaCodec(appCtx, video)
+                    val codecBmp = decodeFrameWithCpuMediaCodec(appCtx, video)
                     if (codecBmp != null && (!isMostlyBlack(codecBmp) || rawBmp == null)) {
                         if (rawBmp != null && rawBmp !== codecBmp) rawBmp.recycle()
                         rawBmp = codecBmp
                     }
                 }
 
-                // راه‌حل سوم: بندانگشتی سیستم
+                // ۳. تلاش سوم (قطعی برای 10-bit x265، 4K HDR10+ و Dolby Vision):
+                // استفاده از موتور داخلی خود mpv (FFmpeg) و متد بومی MPVLib.grabThumbnail
+                if (rawBmp == null || isMostlyBlack(rawBmp)) {
+                    val mpvBmp = extractFrameWithMpvEngine(appCtx, video)
+                    if (mpvBmp != null && (!isMostlyBlack(mpvBmp) || rawBmp == null)) {
+                        if (rawBmp != null && rawBmp !== mpvBmp) rawBmp.recycle()
+                        rawBmp = mpvBmp
+                    }
+                }
+
+                // ۴. تلاش نهایی با بندانگشتی پیش‌فرض سیستم
                 if (rawBmp == null || isMostlyBlack(rawBmp)) {
                     val sysBmp = loadSystemThumbnail(appCtx, video)
                     if (sysBmp != null && (!isMostlyBlack(sysBmp) || rawBmp == null)) {
@@ -494,7 +547,6 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
 
                     thumbCache.put(video.id, finalBmp)
 
-                    // ذخیره اتمیک روی حافظه دائمی (ابتدا در فایل موقت تا فایل ناقص ایجاد نشود)
                     try {
                         val tmpFile = File(cacheFile.parentFile, "${cacheFile.name}.tmp")
                         FileOutputStream(tmpFile).use { out ->
@@ -505,14 +557,13 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                             tmpFile.renameTo(cacheFile)
                         }
                     } catch (e: Exception) {
-                        Log.w(TAG, "Failed to save thumbnail to disk: ${video.name}", e)
+                        Log.w(TAG, "Failed to save thumbnail: ${video.name}", e)
                     }
 
                     imageView.post {
                         if (isAdded && imageView.tag == video.id) {
                             imageView.setImageBitmap(finalBmp)
-                        } else {
-                            // اگر ردیف اسکرول شده بود و دوباره برگشت، آداپتر را مطلع کن
+                        } else if (isAdded) {
                             binding.videoList.post {
                                 val adapter = binding.videoList.adapter as? BrowserAdapter ?: return@post
                                 val idx = adapter.items.indexOfFirst {
@@ -530,11 +581,14 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                 thumbFailed.add(video.id)
             } finally {
                 thumbInProgress.remove(video.id)
+                if (activeDecodeTasks.decrementAndGet() <= 0) {
+                    shutdownMpvThumbnailer()
+                }
             }
         }
     }
 
-    /** مرحله ۱: استخراج فریم با MediaMetadataRetriever بهینه‌شده برای x265 و فایل‌های حجیم */
+    /** مرحله ۱: استخراج فریم با MediaMetadataRetriever */
     private fun retrieverFrame(appCtx: Context, video: VideoScanner.Video): Bitmap? {
         val r = MediaMetadataRetriever()
         var pfd: android.os.ParcelFileDescriptor? = null
@@ -569,8 +623,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                     durationMs * 150L, // 15%
                     durationMs * 250L, // 25%
                     durationMs * 100L, // 10%
-                    15_000_000L,       // 15s
-                    5_000_000L         // 5s
+                    15_000_000L
                 )
             } else {
                 longArrayOf(3_000_000L, 1_000_000L, 0L)
@@ -585,18 +638,6 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                 }
                 if (fallbackFrame == null) fallbackFrame = frame else frame.recycle()
             }
-
-            // در فایل‌های x265 MKV که جدول Seek مشکل دارد، استخراج فریم پیش‌فرض (-1) یا با ایندکس مستقیم
-            val defaultFrame = extractDefaultOrIndexedFrame(r)
-            if (defaultFrame != null) {
-                if (!isMostlyBlack(defaultFrame) || fallbackFrame == null) {
-                    if (fallbackFrame != null && fallbackFrame !== defaultFrame) fallbackFrame.recycle()
-                    return defaultFrame
-                } else {
-                    defaultFrame.recycle()
-                }
-            }
-
             fallbackFrame
         } catch (e: Exception) {
             null
@@ -611,7 +652,6 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             val params = MediaMetadataRetriever.BitmapParams().apply {
                 preferredConfig = Bitmap.Config.ARGB_8888
             }
-            // در x265 10-bit، گاهی getScaledFrameAtTime شکست می‌خورد اما getFrameAtTime با ARGB_8888 کار می‌کند
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     r.getScaledFrameAtTime(
@@ -622,11 +662,6 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
 
             try {
                 r.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, params)
-                    ?.let { return it }
-            } catch (_: Exception) { }
-
-            try {
-                r.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_PREVIOUS_SYNC, params)
                     ?.let { return it }
             } catch (_: Exception) { }
         }
@@ -641,55 +676,20 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
 
         return try {
             r.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                ?: r.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_PREVIOUS_SYNC)
         } catch (_: Exception) {
             null
         }
     }
 
-    /** استخراج فریم بدون نیاز به Seek (مخصوص فایل‌های x265 با Open-GOP یا فاقد Cue) */
-    private fun extractDefaultOrIndexedFrame(r: MediaMetadataRetriever): Bitmap? {
-        try {
-            r.getFrameAtTime(-1L)?.let { if (!isMostlyBlack(it)) return it }
-        } catch (_: Exception) { }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            val params = MediaMetadataRetriever.BitmapParams().apply {
-                preferredConfig = Bitmap.Config.ARGB_8888
-            }
-            for (idx in intArrayOf(60, 24, 5, 0)) {
-                try {
-                    val bmp = r.getFrameAtIndex(idx, params)
-                    if (bmp != null) {
-                        if (!isMostlyBlack(bmp) || idx == 0) return bmp
-                        bmp.recycle()
-                    }
-                } catch (_: Exception) { }
-            }
-        }
-        return null
-    }
-
     /**
-     * مرحله ۲ (مخصوص ویدیوهای x265 / HEVC 10-bit و MKV):
-     * بازگشایی مستقیم استریم با MediaExtractor + MediaCodec روی سطح گرافیکی EGL14.
-     * این متد مشکل عدم پشتیبانی ColorConverter از فرمت‌های ۱۰ بیتی x265 را به‌طور کامل دور می‌زند.
+     * مرحله ۲: دیکد در حالت ByteBuffer پردازنده (بدون Surface گرافیکی)
+     * با ارسال فوری BUFFER_FLAG_END_OF_STREAM پس از فریم کلیدی برای دور زدن بافر B-Frame در انکودهای PSA
+     * و تبدیل مستقیم فرمت‌های ۱۰ بیتی (P010 / I010) و ۸ بیتی (YUV_420_888) به Bitmap.
      */
-    private fun decodeFrameWithMediaCodec(appCtx: Context, video: VideoScanner.Video): Bitmap? {
-        // ابتدا دیکدر پیش‌فرض (سخت‌افزاری) و در صورت خطا، دیکدر نرم‌افزاری HEVC اندروید را تست می‌کند
-        return decodeWithCodecInternal(appCtx, video, preferSoftware = false)
-            ?: decodeWithCodecInternal(appCtx, video, preferSoftware = true)
-    }
-
-    private fun decodeWithCodecInternal(
-        appCtx: Context,
-        video: VideoScanner.Video,
-        preferSoftware: Boolean
-    ): Bitmap? {
+    private fun decodeFrameWithCpuMediaCodec(appCtx: Context, video: VideoScanner.Video): Bitmap? {
         val extractor = MediaExtractor()
         var pfd: android.os.ParcelFileDescriptor? = null
         var codec: MediaCodec? = null
-        var eglSurface: OffscreenEglSurface? = null
 
         return try {
             var sourceSet = false
@@ -712,146 +712,560 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             }
 
             var videoTrackIndex = -1
-            var format: MediaFormat? = null
-            var mime = ""
+            var origFormat: MediaFormat? = null
+            var origMime = ""
             for (i in 0 until extractor.trackCount) {
                 val f = extractor.getTrackFormat(i)
                 val m = f.getString(MediaFormat.KEY_MIME) ?: continue
                 if (m.startsWith("video/")) {
                     videoTrackIndex = i
-                    format = f
-                    mime = m
+                    origFormat = f
+                    origMime = m
                     break
                 }
             }
-            if (videoTrackIndex < 0 || format == null) return null
+            if (videoTrackIndex < 0 || origFormat == null) return null
 
             extractor.selectTrack(videoTrackIndex)
 
+            val width = origFormat.getInteger(MediaFormat.KEY_WIDTH)
+            val height = origFormat.getInteger(MediaFormat.KEY_HEIGHT)
             val durationUs = when {
                 video.durationMs > 0 -> video.durationMs * 1000L
-                format.containsKey(MediaFormat.KEY_DURATION) -> format.getLong(MediaFormat.KEY_DURATION)
+                origFormat.containsKey(MediaFormat.KEY_DURATION) -> origFormat.getLong(MediaFormat.KEY_DURATION)
                 else -> 0L
             }
 
-            eglSurface = OffscreenEglSurface(THUMB_WIDTH, THUMB_HEIGHT)
+            // تبدیل Dolby Vision به HEVC و ساخت فرمت تمیز بدون تگ‌های پروفایل HDR10+ که باعث خطای configure می‌شوند
+            val targetMime = if (origMime == "video/dolby-vision") {
+                MediaFormat.MIMETYPE_VIDEO_HEVC
+            } else {
+                origMime
+            }
 
-            codec = if (preferSoftware && mime == MediaFormat.MIMETYPE_VIDEO_HEVC) {
+            val cleanFormat = MediaFormat.createVideoFormat(targetMime, width, height)
+            for (csdKey in arrayOf("csd-0", "csd-1", "csd-2")) {
+                if (origFormat.containsKey(csdKey)) {
+                    origFormat.getByteBuffer(csdKey)?.let { buf ->
+                        cleanFormat.setByteBuffer(csdKey, buf.duplicate())
+                    }
+                }
+            }
+
+            codec = if (targetMime == MediaFormat.MIMETYPE_VIDEO_HEVC) {
                 try {
                     MediaCodec.createByCodecName("c2.android.hevc.decoder")
                 } catch (_: Exception) {
-                    MediaCodec.createByCodecName("OMX.google.hevc.decoder")
+                    try {
+                        MediaCodec.createByCodecName("OMX.google.hevc.decoder")
+                    } catch (_: Exception) {
+                        MediaCodec.createDecoderByType(targetMime)
+                    }
                 }
             } else {
-                MediaCodec.createDecoderByType(mime)
+                MediaCodec.createDecoderByType(targetMime)
             }
 
-            codec.configure(format, eglSurface.surface, null, 0)
+            try {
+                codec.configure(cleanFormat, null, null, 0)
+            } catch (_: Exception) {
+                codec.configure(origFormat, null, null, 0)
+            }
             codec.start()
 
             val seekTargetsUs = if (durationUs > 10_000_000L) {
-                longArrayOf((durationUs * 0.15).toLong(), (durationUs * 0.30).toLong(), 0L)
+                longArrayOf((durationUs * 0.15).toLong(), (durationUs * 0.28).toLong(), 0L)
             } else {
                 longArrayOf(0L)
             }
 
-            var resultBmp: Bitmap? = null
             val bufferInfo = MediaCodec.BufferInfo()
+            var fallbackBmp: Bitmap? = null
 
             for (seekUs in seekTargetsUs) {
-                try {
-                    codec.flush()
-                    extractor.seekTo(seekUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
-                    if (extractor.sampleTime < 0L && seekUs > 0L) {
+                // ابتدا با ارسال فقط ۱ فریم کلیدی + EOS فوری تست می‌کنیم (بسیار سریع)،
+                // و اگر فریم کلیدی CRA بود که نیاز به چند بسته بیشتر داشت، تا ۱۲ بسته می‌فرستیم.
+                for (maxPackets in intArrayOf(2, 12)) {
+                    try {
+                        codec.flush()
+                        extractor.seekTo(seekUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+                        if (extractor.sampleTime < 0L && seekUs > 0L) {
+                            extractor.seekTo(0L, MediaExtractor.SEEK_TO_NEXT_SYNC)
+                        }
+                    } catch (_: Exception) {
                         extractor.seekTo(0L, MediaExtractor.SEEK_TO_NEXT_SYNC)
                     }
-                } catch (_: Exception) {
-                    extractor.seekTo(0L, MediaExtractor.SEEK_TO_NEXT_SYNC)
-                }
 
-                var inputEos = false
-                var outputDone = false
-                var decodedFrames = 0
-                var steps = 0
+                    var packetsSent = 0
+                    var inputEos = false
+                    var outputDone = false
+                    var gotFrameInPass = false
+                    var loops = 0
 
-                while (!outputDone && steps < 120) {
-                    steps++
-                    if (!inputEos) {
-                        val inIdx = codec.dequeueInputBuffer(10_000L)
-                        if (inIdx >= 0) {
-                            val inBuf = codec.getInputBuffer(inIdx)
-                            if (inBuf != null) {
-                                val sampleSize = extractor.readSampleData(inBuf, 0)
-                                if (sampleSize < 0) {
+                    while (!outputDone && loops < 80) {
+                        loops++
+                        if (!inputEos) {
+                            val inIdx = codec.dequeueInputBuffer(15_000L)
+                            if (inIdx >= 0) {
+                                if (packetsSent >= maxPackets) {
+                                    // ارسال فوری END_OF_STREAM تا دیکدر بدون انتظار برای 8 فریم B-Frame، فریم کلیدی را خروجی دهد
                                     codec.queueInputBuffer(
                                         inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM
                                     )
                                     inputEos = true
                                 } else {
-                                    val pts = extractor.sampleTime.coerceAtLeast(0L)
-                                    codec.queueInputBuffer(inIdx, 0, sampleSize, pts, 0)
-                                    extractor.advance()
+                                    val inBuf = codec.getInputBuffer(inIdx)
+                                    val sampleSize = if (inBuf != null) extractor.readSampleData(inBuf, 0) else -1
+                                    if (sampleSize < 0) {
+                                        codec.queueInputBuffer(
+                                            inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM
+                                        )
+                                        inputEos = true
+                                    } else {
+                                        val pts = extractor.sampleTime.coerceAtLeast(0L)
+                                        codec.queueInputBuffer(inIdx, 0, sampleSize, pts, 0)
+                                        packetsSent++
+                                        extractor.advance()
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    val outIdx = codec.dequeueOutputBuffer(bufferInfo, 10_000L)
-                    if (outIdx >= 0) {
-                        val doRender = bufferInfo.size > 0
-                        codec.releaseOutputBuffer(outIdx, doRender)
-                        if (doRender) {
-                            decodedFrames++
-                            val bmp = eglSurface.awaitAndReadBitmap()
-                            if (bmp != null) {
-                                if (!isMostlyBlack(bmp)) {
-                                    resultBmp?.recycle()
-                                    return bmp
+                        val outIdx = codec.dequeueOutputBuffer(bufferInfo, 20_000L)
+                        if (outIdx >= 0) {
+                            if (bufferInfo.size > 0) {
+                                val bmp = convertOutputToBitmap(codec, outIdx, bufferInfo)
+                                codec.releaseOutputBuffer(outIdx, false)
+                                if (bmp != null) {
+                                    gotFrameInPass = true
+                                    if (!isMostlyBlack(bmp)) {
+                                        fallbackBmp?.recycle()
+                                        return bmp
+                                    }
+                                    if (fallbackBmp == null) fallbackBmp = bmp else bmp.recycle()
                                 }
-                                if (resultBmp == null) {
-                                    resultBmp = bmp
-                                } else {
-                                    bmp.recycle()
-                                }
+                                outputDone = true
+                            } else {
+                                codec.releaseOutputBuffer(outIdx, false)
                             }
-                            if (decodedFrames >= 2) {
+                            if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
                                 outputDone = true
                             }
                         }
-                        if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                            outputDone = true
-                        }
                     }
+                    if (gotFrameInPass) break
                 }
             }
-            resultBmp
+            fallbackBmp
         } catch (e: Exception) {
             null
         } finally {
             try { codec?.stop() } catch (_: Exception) { }
             try { codec?.release() } catch (_: Exception) { }
-            try { eglSurface?.release() } catch (_: Exception) { }
             try { extractor.release() } catch (_: Exception) { }
             try { pfd?.close() } catch (_: Exception) { }
         }
     }
 
+    /** تبدیل بافر خروجی MediaCodec (چه 8-bit YUV_420_888 و چه 10-bit P010 / I010) به Bitmap */
+    private fun convertOutputToBitmap(
+        codec: MediaCodec,
+        outIdx: Int,
+        bufferInfo: MediaCodec.BufferInfo
+    ): Bitmap? {
+        try {
+            val image = codec.getOutputImage(outIdx)
+            if (image != null) {
+                try {
+                    if (image.planes.size >= 3) {
+                        return yuvImageToBitmap(image)
+                    }
+                } finally {
+                    image.close()
+                }
+            }
+        } catch (_: Exception) { }
+
+        return try {
+            val outBuf = codec.getOutputBuffer(outIdx) ?: return null
+            val fmt = codec.outputFormat
+            rawYuvBufferToBitmap(outBuf, bufferInfo, fmt)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** تبدیل Image سه صفحه‌ای (8-bit YUV_420_888 یا 10-bit YCBCR_P010) به Bitmap */
+    private fun yuvImageToBitmap(image: Image): Bitmap? {
+        val crop = image.cropRect
+        val srcW = if (crop != null && crop.width() > 0) crop.width() else image.width
+        val srcH = if (crop != null && crop.height() > 0) crop.height() else image.height
+        val cropLeft = crop?.left ?: 0
+        val cropTop = crop?.top ?: 0
+        if (srcW <= 0 || srcH <= 0) return null
+
+        val planes = image.planes
+        val yBuf = planes[0].buffer
+        val uBuf = planes[1].buffer
+        val vBuf = planes[2].buffer
+        val yRowStride = planes[0].rowStride
+        val yPixStride = planes[0].pixelStride
+        val uRowStride = planes[1].rowStride
+        val uPixStride = planes[1].pixelStride
+        val vRowStride = planes[2].rowStride
+        val vPixStride = planes[2].pixelStride
+
+        // تشخیص ۱۰ بیتی بودن (فرمت 54 = YCBCR_P010 یا گام پیکسلی Y برابر ۲ بایت)
+        val is16Bit = image.format == 54 || yPixStride >= 2 && (yRowStride >= image.width * 2)
+
+        val dstW = THUMB_WIDTH
+        val dstH = (THUMB_WIDTH.toFloat() * srcH / srcW).toInt().coerceIn(1, THUMB_WIDTH * 2)
+        val pixels = IntArray(dstW * dstH)
+
+        var shift10 = 8
+        if (is16Bit) {
+            // بررسی تراز بودن ۱۰ بیت در بیت‌های بالا (P010: shift 8) یا بیت‌های پایین (I010: shift 2)
+            var maxSample = 0
+            val midY = cropTop + srcH / 2
+            for (i in 0 until 16) {
+                val sx = cropLeft + (srcW * i / 16)
+                val pos = midY * yRowStride + sx * yPixStride
+                if (pos + 1 < yBuf.limit()) {
+                    val v16 = (yBuf.get(pos).toInt() and 0xFF) or
+                            ((yBuf.get(pos + 1).toInt() and 0xFF) shl 8)
+                    if (v16 > maxSample) maxSample = v16
+                }
+            }
+            shift10 = if (maxSample > 1024) 8 else 2
+        }
+
+        var outIdx = 0
+        for (dy in 0 until dstH) {
+            val sy = cropTop + (dy * srcH / dstH)
+            val yRowOffset = sy * yRowStride
+            val uvY = sy shr 1
+            val uRowOffset = uvY * uRowStride
+            val vRowOffset = uvY * vRowStride
+
+            for (dx in 0 until dstW) {
+                val sx = cropLeft + (dx * srcW / dstW)
+                val uvX = sx shr 1
+
+                val yVal: Int
+                val uVal: Int
+                val vVal: Int
+
+                if (is16Bit) {
+                    val yPos = yRowOffset + sx * yPixStride
+                    val uPos = uRowOffset + uvX * uPixStride
+                    val vPos = vRowOffset + uvX * vPixStride
+                    val y16 = (yBuf.get(yPos).toInt() and 0xFF) or ((yBuf.get(yPos + 1).toInt() and 0xFF) shl 8)
+                    val u16 = (uBuf.get(uPos).toInt() and 0xFF) or ((uBuf.get(uPos + 1).toInt() and 0xFF) shl 8)
+                    val v16 = (vBuf.get(vPos).toInt() and 0xFF) or ((vBuf.get(vPos + 1).toInt() and 0xFF) shl 8)
+                    yVal = (y16 ushr shift10) and 0xFF
+                    uVal = (u16 ushr shift10) and 0xFF
+                    vVal = (v16 ushr shift10) and 0xFF
+                } else {
+                    yVal = yBuf.get(yRowOffset + sx * yPixStride).toInt() and 0xFF
+                    uVal = uBuf.get(uRowOffset + uvX * uPixStride).toInt() and 0xFF
+                    vVal = vBuf.get(vRowOffset + uvX * vPixStride).toInt() and 0xFF
+                }
+
+                pixels[outIdx++] = yuvToArgb(yVal, uVal, vVal)
+            }
+        }
+
+        return Bitmap.createBitmap(pixels, dstW, dstH, Bitmap.Config.ARGB_8888)
+    }
+
+    /** تبدیل ByteBuffer خام (برای اندرویدهای قدیمی‌تر که getOutputImage روی P010 مقدار null می‌دهد) */
+    private fun rawYuvBufferToBitmap(
+        buf: ByteBuffer,
+        bufferInfo: MediaCodec.BufferInfo,
+        fmt: MediaFormat
+    ): Bitmap? {
+        val width = fmt.getInteger(MediaFormat.KEY_WIDTH)
+        val height = fmt.getInteger(MediaFormat.KEY_HEIGHT)
+        if (width <= 0 || height <= 0) return null
+
+        val cropLeft = if (fmt.containsKey("crop-left")) fmt.getInteger("crop-left") else 0
+        val cropTop = if (fmt.containsKey("crop-top")) fmt.getInteger("crop-top") else 0
+        val cropRight = if (fmt.containsKey("crop-right")) fmt.getInteger("crop-right") else width - 1
+        val cropBottom = if (fmt.containsKey("crop-bottom")) fmt.getInteger("crop-bottom") else height - 1
+        val srcW = (cropRight - cropLeft + 1).coerceIn(1, width)
+        val srcH = (cropBottom - cropTop + 1).coerceIn(1, height)
+
+        val rawStride = if (fmt.containsKey(MediaFormat.KEY_STRIDE)) fmt.getInteger(MediaFormat.KEY_STRIDE) else width
+        val sliceHeight = if (fmt.containsKey(MediaFormat.KEY_SLICE_HEIGHT)) {
+            fmt.getInteger(MediaFormat.KEY_SLICE_HEIGHT).coerceAtLeast(height)
+        } else height
+        val colorFormat = if (fmt.containsKey(MediaFormat.KEY_COLOR_FORMAT)) {
+            fmt.getInteger(MediaFormat.KEY_COLOR_FORMAT)
+        } else 0
+
+        val is16Bit = colorFormat == 54 || bufferInfo.size >= width * height * 2
+        val dstW = THUMB_WIDTH
+        val dstH = (THUMB_WIDTH.toFloat() * srcH / srcW).toInt().coerceIn(1, THUMB_WIDTH * 2)
+        val pixels = IntArray(dstW * dstH)
+        val baseOffset = bufferInfo.offset
+
+        if (is16Bit) {
+            val rowStrideBytes = if (rawStride >= width * 2) rawStride else rawStride * 2
+            val uvBase = baseOffset + rowStrideBytes * sliceHeight
+
+            var maxSample = 0
+            val testRow = baseOffset + (cropTop + srcH / 2) * rowStrideBytes
+            for (i in 0 until 16) {
+                val pos = testRow + (cropLeft + srcW * i / 16) * 2
+                if (pos + 1 < buf.limit()) {
+                    val v16 = (buf.get(pos).toInt() and 0xFF) or ((buf.get(pos + 1).toInt() and 0xFF) shl 8)
+                    if (v16 > maxSample) maxSample = v16
+                }
+            }
+            val shift10 = if (maxSample > 1024) 8 else 2
+
+            var outIdx = 0
+            for (dy in 0 until dstH) {
+                val sy = cropTop + (dy * srcH / dstH)
+                val yRow = baseOffset + sy * rowStrideBytes
+                val uvRow = uvBase + (sy shr 1) * rowStrideBytes
+                for (dx in 0 until dstW) {
+                    val sx = cropLeft + (dx * srcW / dstW)
+                    val yPos = yRow + sx * 2
+                    val uvPos = uvRow + (sx and -2) * 2
+                    if (yPos + 1 >= buf.limit() || uvPos + 3 >= buf.limit()) {
+                        pixels[outIdx++] = Color.BLACK
+                        continue
+                    }
+                    val y16 = (buf.get(yPos).toInt() and 0xFF) or ((buf.get(yPos + 1).toInt() and 0xFF) shl 8)
+                    val u16 = (buf.get(uvPos).toInt() and 0xFF) or ((buf.get(uvPos + 1).toInt() and 0xFF) shl 8)
+                    val v16 = (buf.get(uvPos + 2).toInt() and 0xFF) or ((buf.get(uvPos + 3).toInt() and 0xFF) shl 8)
+                    pixels[outIdx++] = yuvToArgb(
+                        (y16 ushr shift10) and 0xFF,
+                        (u16 ushr shift10) and 0xFF,
+                        (v16 ushr shift10) and 0xFF
+                    )
+                }
+            }
+        } else {
+            val rowStride = rawStride.coerceAtLeast(width)
+            val ySize = rowStride * sliceHeight
+            val isSemiPlanar = colorFormat == 21 || colorFormat == 0x7FA30C00 || colorFormat == 0x7FA30C04
+            val uBase = baseOffset + ySize
+            val vBase = uBase + (ySize / 4)
+
+            var outIdx = 0
+            for (dy in 0 until dstH) {
+                val sy = cropTop + (dy * srcH / dstH)
+                val yRow = baseOffset + sy * rowStride
+                for (dx in 0 until dstW) {
+                    val sx = cropLeft + (dx * srcW / dstW)
+                    val yPos = yRow + sx
+                    if (yPos >= buf.limit()) {
+                        pixels[outIdx++] = Color.BLACK
+                        continue
+                    }
+                    val yVal = buf.get(yPos).toInt() and 0xFF
+                    val uVal: Int
+                    val vVal: Int
+                    if (isSemiPlanar) {
+                        val uvPos = uBase + (sy shr 1) * rowStride + (sx and -2)
+                        if (uvPos + 1 < buf.limit()) {
+                            uVal = buf.get(uvPos).toInt() and 0xFF
+                            vVal = buf.get(uvPos + 1).toInt() and 0xFF
+                        } else {
+                            uVal = 128; vVal = 128
+                        }
+                    } else {
+                        val uvOffset = (sy shr 1) * (rowStride shr 1) + (sx shr 1)
+                        if (vBase + uvOffset < buf.limit()) {
+                            uVal = buf.get(uBase + uvOffset).toInt() and 0xFF
+                            vVal = buf.get(vBase + uvOffset).toInt() and 0xFF
+                        } else {
+                            uVal = 128; vVal = 128
+                        }
+                    }
+                    pixels[outIdx++] = yuvToArgb(yVal, uVal, vVal)
+                }
+            }
+        }
+
+        return Bitmap.createBitmap(pixels, dstW, dstH, Bitmap.Config.ARGB_8888)
+    }
+
+    private fun yuvToArgb(y: Int, u: Int, v: Int): Int {
+        val c = (y - 16).coerceAtLeast(0)
+        val d = u - 128
+        val e = v - 128
+        val r = ((298 * c + 409 * e + 128) shr 8).coerceIn(0, 255)
+        val g = ((298 * c - 100 * d - 208 * e + 128) shr 8).coerceIn(0, 255)
+        val b = ((298 * c + 516 * d + 128) shr 8).coerceIn(0, 255)
+        return (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+    }
+
     /**
-     * سطح گرافیکی مخفی (Offscreen EGL14 + OES Texture) برای تبدیل سخت‌افزاری فریم‌های ۱۰ بیتی x265 به Bitmap
+     * مرحله ۳ (موتور داخلی mpv / FFmpeg):
+     * بازگشایی صددرصدی تمام فرمت‌های x265 10-bit، 4K HDR10+ و Dolby Vision با خود libmpv
      */
-    private class OffscreenEglSurface(val width: Int, val height: Int) :
-        SurfaceTexture.OnFrameAvailableListener {
+    private fun extractFrameWithMpvEngine(appCtx: Context, video: VideoScanner.Video): Bitmap? {
+        if (isPlayerActivityActive || BackgroundPlaybackService.isRunning) return null
+
+        synchronized(mpvThumbLock) {
+            if (isPlayerActivityActive || BackgroundPlaybackService.isRunning) return null
+            return try {
+                if (!mpvThumbActive) {
+                    Utils.copyAssets(appCtx)
+                    mpvThumbSurface = MpvOffscreenSurface(THUMB_WIDTH, THUMB_HEIGHT)
+                    MPVLib.create(appCtx)
+                    MPVLib.setOptionString("config", "no")
+                    MPVLib.setOptionString("gpu-context", "android")
+                    MPVLib.setOptionString("opengl-es", "yes")
+                    MPVLib.setOptionString("vo", "gpu")
+                    // استفاده از دیکدر نرم‌افزاری FFmpeg برای پشتیبانی قطعی از 10bit x265 و HDR10+
+                    MPVLib.setOptionString("hwdec", "no")
+                    MPVLib.setOptionString("vd-lavc-fast", "yes")
+                    MPVLib.setOptionString("vd-lavc-skiploopfilter", "nonkey")
+                    MPVLib.setOptionString("ao", "null")
+                    MPVLib.setOptionString("vid", "1")
+                    MPVLib.setOptionString("aid", "no")
+                    MPVLib.setOptionString("sid", "no")
+                    MPVLib.setOptionString("sub-auto", "no")
+                    MPVLib.setOptionString("audio-file-auto", "no")
+                    MPVLib.setOptionString("pause", "yes")
+                    MPVLib.setOptionString("keep-open", "yes")
+                    MPVLib.setOptionString("hr-seek", "no")
+                    MPVLib.setOptionString("idle", "yes")
+                    MPVLib.setOptionString("force-window", "no")
+                    MPVLib.init()
+
+                    mpvThumbSurface?.surface?.let { surf ->
+                        MPVLib.attachSurface(surf)
+                        MPVLib.setPropertyString(
+                            "android-surface-size", "${THUMB_WIDTH}x${THUMB_HEIGHT}"
+                        )
+                        MPVLib.setOptionString("force-window", "yes")
+                    }
+                    MPVLib.addObserver(mpvThumbObserver)
+                    mpvThumbActive = true
+                }
+
+                val filepath = resolveVideoPathForMpv(appCtx, video.uri)
+                val startPercent = if (video.durationMs > 15_000L) "15%" else "0"
+                MPVLib.setOptionString("start", startPercent)
+
+                synchronized(mpvRestartSync) {
+                    mpvPlaybackRestarted = false
+                    mpvFileEnded = false
+                }
+
+                MPVLib.command(arrayOf("loadfile", filepath, "replace"))
+
+                // انتظار تا آماده شدن اولین فریم ویدیو در libmpv
+                waitForMpvFrame(2500L)
+                if (isPlayerActivityActive || BackgroundPlaybackService.isRunning) return null
+
+                var bmp = grabCurrentMpvBitmap()
+                if (bmp == null || isMostlyBlack(bmp)) {
+                    for (seekPct in arrayOf("28", "45", "10")) {
+                        if (isPlayerActivityActive || BackgroundPlaybackService.isRunning) break
+                        synchronized(mpvRestartSync) {
+                            mpvPlaybackRestarted = false
+                        }
+                        MPVLib.command(arrayOf("seek", seekPct, "absolute-percent+keyframes"))
+                        waitForMpvFrame(1200L)
+                        val candidate = grabCurrentMpvBitmap()
+                        if (candidate != null) {
+                            if (!isMostlyBlack(candidate)) {
+                                if (bmp != null && bmp !== candidate) bmp.recycle()
+                                bmp = candidate
+                                break
+                            }
+                            if (bmp == null) bmp = candidate else candidate.recycle()
+                        }
+                    }
+                }
+                bmp
+            } catch (e: Exception) {
+                Log.w(TAG, "MPV engine thumb extraction failed: ${video.name}", e)
+                shutdownMpvThumbnailer()
+                null
+            }
+        }
+    }
+
+    private fun waitForMpvFrame(timeoutMs: Long) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        synchronized(mpvRestartSync) {
+            while (!mpvPlaybackRestarted && !mpvFileEnded && !isPlayerActivityActive &&
+                !BackgroundPlaybackService.isRunning
+            ) {
+                val rem = deadline - System.currentTimeMillis()
+                if (rem <= 0L) break
+                try { mpvRestartSync.wait(rem.coerceAtMost(80L)) } catch (_: InterruptedException) { break }
+            }
+        }
+        // فرصت کوتاه به ترد رندر برای تکمیل فریم
+        if (!isPlayerActivityActive && !mpvFileEnded && !BackgroundPlaybackService.isRunning) {
+            try { Thread.sleep(40L) } catch (_: InterruptedException) { }
+        }
+    }
+
+    private fun grabCurrentMpvBitmap(): Bitmap? {
+        val fmt = MPVLib.getPropertyString("video-format")
+        if (!fmt.isNullOrEmpty()) {
+            try {
+                MPVLib.grabThumbnail(THUMB_WIDTH)?.let { return it }
+            } catch (_: Exception) { }
+        }
+        return mpvThumbSurface?.readRenderedBitmap()
+    }
+
+    private fun resolveVideoPathForMpv(appCtx: Context, uri: Uri): String {
+        try {
+            appCtx.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                val path = Utils.findRealPath(pfd.fd)
+                if (path != null) return path
+            }
+        } catch (_: Exception) { }
+        return uri.toString()
+    }
+
+    private fun shutdownMpvThumbnailer() {
+        synchronized(mpvRestartSync) {
+            mpvFileEnded = true
+            mpvRestartSync.notifyAll()
+        }
+        synchronized(mpvThumbLock) {
+            if (!mpvThumbActive) return
+            mpvThumbActive = false
+            try { MPVLib.removeObserver(mpvThumbObserver) } catch (_: Exception) { }
+            try { MPVLib.setPropertyString("vo", "null") } catch (_: Exception) { }
+            try { MPVLib.setPropertyString("force-window", "no") } catch (_: Exception) { }
+            try { MPVLib.detachSurface() } catch (_: Exception) { }
+            try { MPVLib.destroy() } catch (_: Exception) { }
+            try { mpvThumbSurface?.release() } catch (_: Exception) { }
+            mpvThumbSurface = null
+        }
+    }
+
+    /**
+     * سطح گرافیکی مخفی روی یک HandlerThread اختصاصی که فریم‌های رندرشده توسط libmpv را مصرف و به Bitmap تبدیل می‌کند
+     */
+    private class MpvOffscreenSurface(val width: Int, val height: Int) {
+        private val glThread = HandlerThread("MpvThumbGL").apply { start() }
+        private val glHandler = Handler(glThread.looper)
 
         private var eglDisplay = EGL14.EGL_NO_DISPLAY
         private var eglContext = EGL14.EGL_NO_CONTEXT
         private var eglSurface = EGL14.EGL_NO_SURFACE
         private var textureId = 0
         private var program = 0
-        var surfaceTexture: SurfaceTexture? = null
+        private var surfaceTexture: SurfaceTexture? = null
         var surface: Surface? = null
+            private set
 
-        private val frameSyncObj = Object()
-        private var frameAvailable = false
+        @Volatile
+        private var hasRenderedFrame = false
         private val stMatrix = FloatArray(16)
         private val mvpMatrix = FloatArray(16)
 
@@ -859,7 +1273,6 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             .order(ByteOrder.nativeOrder())
             .asFloatBuffer()
             .apply {
-                // مختصات صفحه (x, y) و مختصات بافت (u, v با وارونگی عمودی برای glReadPixels)
                 put(floatArrayOf(
                     -1f, -1f, 0f, 1f,
                      1f, -1f, 1f, 1f,
@@ -870,6 +1283,27 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             }
 
         init {
+            val initLock = Object()
+            var initDone = false
+            glHandler.post {
+                try {
+                    initGl()
+                } catch (_: Exception) {
+                } finally {
+                    synchronized(initLock) {
+                        initDone = true
+                        initLock.notifyAll()
+                    }
+                }
+            }
+            synchronized(initLock) {
+                while (!initDone) {
+                    try { initLock.wait(500L); break } catch (_: InterruptedException) { break }
+                }
+            }
+        }
+
+        private fun initGl() {
             eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
             val version = IntArray(2)
             EGL14.eglInitialize(eglDisplay, version, 0, version, 1)
@@ -921,79 +1355,110 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             Matrix.setIdentityM(mvpMatrix, 0)
 
             surfaceTexture = SurfaceTexture(textureId).apply {
-                setOnFrameAvailableListener(this@OffscreenEglSurface, Handler(Looper.getMainLooper()))
+                setDefaultBufferSize(width, height)
+                setOnFrameAvailableListener({ st ->
+                    try {
+                        EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
+                        st.updateTexImage()
+                        hasRenderedFrame = true
+                    } catch (_: Exception) { }
+                }, glHandler)
             }
             surface = Surface(surfaceTexture)
         }
 
-        override fun onFrameAvailable(st: SurfaceTexture?) {
-            synchronized(frameSyncObj) {
-                frameAvailable = true
-                frameSyncObj.notifyAll()
-            }
-        }
+        fun readRenderedBitmap(): Bitmap? {
+            if (!hasRenderedFrame) return null
+            var result: Bitmap? = null
+            val lock = Object()
+            var done = false
+            glHandler.post {
+                try {
+                    EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
+                    surfaceTexture?.updateTexImage()
+                    surfaceTexture?.getTransformMatrix(stMatrix)
 
-        fun awaitAndReadBitmap(): Bitmap? {
-            synchronized(frameSyncObj) {
-                if (!frameAvailable) {
-                    try { frameSyncObj.wait(400L) } catch (_: InterruptedException) { }
+                    GLES20.glViewport(0, 0, width, height)
+                    GLES20.glClearColor(0f, 0f, 0f, 1f)
+                    GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+
+                    GLES20.glUseProgram(program)
+                    val posHandle = GLES20.glGetAttribLocation(program, "aPosition")
+                    val texHandle = GLES20.glGetAttribLocation(program, "aTextureCoord")
+                    val mvpHandle = GLES20.glGetUniformLocation(program, "uMVPMatrix")
+                    val stHandle = GLES20.glGetUniformLocation(program, "uSTMatrix")
+
+                    vertexBuffer.position(0)
+                    GLES20.glVertexAttribPointer(posHandle, 2, GLES20.GL_FLOAT, false, 16, vertexBuffer)
+                    GLES20.glEnableVertexAttribArray(posHandle)
+
+                    vertexBuffer.position(2)
+                    GLES20.glVertexAttribPointer(texHandle, 2, GLES20.GL_FLOAT, false, 16, vertexBuffer)
+                    GLES20.glEnableVertexAttribArray(texHandle)
+
+                    GLES20.glUniformMatrix4fv(mvpHandle, 1, false, mvpMatrix, 0)
+                    GLES20.glUniformMatrix4fv(stHandle, 1, false, stMatrix, 0)
+
+                    GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+                    GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
+                    GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+                    GLES20.glFinish()
+
+                    val buf = ByteBuffer.allocateDirect(width * height * 4).order(ByteOrder.LITTLE_ENDIAN)
+                    GLES20.glReadPixels(0, 0, width, height, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, buf)
+                    buf.rewind()
+
+                    val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                    bmp.copyPixelsFromBuffer(buf)
+                    result = bmp
+                } catch (_: Exception) {
+                } finally {
+                    synchronized(lock) {
+                        done = true
+                        lock.notifyAll()
+                    }
                 }
-                frameAvailable = false
             }
-
-            EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
-            surfaceTexture?.updateTexImage()
-            surfaceTexture?.getTransformMatrix(stMatrix)
-
-            GLES20.glViewport(0, 0, width, height)
-            GLES20.glClearColor(0f, 0f, 0f, 1f)
-            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
-
-            GLES20.glUseProgram(program)
-            val posHandle = GLES20.glGetAttribLocation(program, "aPosition")
-            val texHandle = GLES20.glGetAttribLocation(program, "aTextureCoord")
-            val mvpHandle = GLES20.glGetUniformLocation(program, "uMVPMatrix")
-            val stHandle = GLES20.glGetUniformLocation(program, "uSTMatrix")
-
-            vertexBuffer.position(0)
-            GLES20.glVertexAttribPointer(posHandle, 2, GLES20.GL_FLOAT, false, 16, vertexBuffer)
-            GLES20.glEnableVertexAttribArray(posHandle)
-
-            vertexBuffer.position(2)
-            GLES20.glVertexAttribPointer(texHandle, 2, GLES20.GL_FLOAT, false, 16, vertexBuffer)
-            GLES20.glEnableVertexAttribArray(texHandle)
-
-            GLES20.glUniformMatrix4fv(mvpHandle, 1, false, mvpMatrix, 0)
-            GLES20.glUniformMatrix4fv(stHandle, 1, false, stMatrix, 0)
-
-            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
-            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
-            GLES20.glFinish()
-
-            val buf = ByteBuffer.allocateDirect(width * height * 4).order(ByteOrder.LITTLE_ENDIAN)
-            GLES20.glReadPixels(0, 0, width, height, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, buf)
-            buf.rewind()
-
-            val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            bmp.copyPixelsFromBuffer(buf)
-            return bmp
+            synchronized(lock) {
+                if (!done) {
+                    try { lock.wait(400L) } catch (_: InterruptedException) { }
+                }
+            }
+            return result
         }
 
         fun release() {
-            if (eglDisplay !== EGL14.EGL_NO_DISPLAY) {
-                EGL14.eglMakeCurrent(
-                    eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT
-                )
-                EGL14.eglDestroySurface(eglDisplay, eglSurface)
-                EGL14.eglDestroyContext(eglDisplay, eglContext)
-                EGL14.eglTerminate(eglDisplay)
+            val lock = Object()
+            var done = false
+            glHandler.post {
+                try {
+                    if (eglDisplay !== EGL14.EGL_NO_DISPLAY) {
+                        EGL14.eglMakeCurrent(
+                            eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT
+                        )
+                        EGL14.eglDestroySurface(eglDisplay, eglSurface)
+                        EGL14.eglDestroyContext(eglDisplay, eglContext)
+                        EGL14.eglTerminate(eglDisplay)
+                    }
+                    eglDisplay = EGL14.EGL_NO_DISPLAY
+                    eglContext = EGL14.EGL_NO_CONTEXT
+                    eglSurface = EGL14.EGL_NO_SURFACE
+                    surface?.release()
+                    surfaceTexture?.release()
+                } catch (_: Exception) {
+                } finally {
+                    synchronized(lock) {
+                        done = true
+                        lock.notifyAll()
+                    }
+                }
             }
-            eglDisplay = EGL14.EGL_NO_DISPLAY
-            eglContext = EGL14.EGL_NO_CONTEXT
-            eglSurface = EGL14.EGL_NO_SURFACE
-            surface?.release()
-            surfaceTexture?.release()
+            synchronized(lock) {
+                if (!done) {
+                    try { lock.wait(300L) } catch (_: InterruptedException) { }
+                }
+            }
+            glThread.quitSafely()
         }
 
         private fun createProgram(vertexSource: String, fragmentSource: String): Int {
@@ -1014,7 +1479,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         }
 
         companion object {
-            private const val VERTEX_SHADER = """
+            private val VERTEX_SHADER = """
                 uniform mat4 uMVPMatrix;
                 uniform mat4 uSTMatrix;
                 attribute vec4 aPosition;
@@ -1024,8 +1489,9 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                     gl_Position = uMVPMatrix * aPosition;
                     vTextureCoord = (uSTMatrix * aTextureCoord).xy;
                 }
-            """
-            private const val FRAGMENT_SHADER = """
+            """.trimIndent()
+
+            private val FRAGMENT_SHADER = """
                 #extension GL_OES_EGL_image_external : require
                 precision mediump float;
                 varying vec2 vTextureCoord;
@@ -1033,7 +1499,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                 void main() {
                     gl_FragColor = texture2D(sTexture, vTextureCoord);
                 }
-            """
+            """.trimIndent()
         }
     }
 
@@ -1053,7 +1519,6 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         }
     }
 
-    /** تشخیص فریم‌های سیاه یا بسیار تاریک */
     private fun isMostlyBlack(bmp: Bitmap): Boolean {
         val w = bmp.width
         val h = bmp.height
@@ -1082,7 +1547,6 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         return avgLum < 14 && brightPixels < 3
     }
 
-    /** برش و تغییر سایز متناسب با کادر 112dp × 72dp */
     private fun scaleCenterCrop(src: Bitmap, targetW: Int, targetH: Int): Bitmap {
         val srcW = src.width
         val srcH = src.height
@@ -1100,7 +1564,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         }
 
         val x = ((scaled.width - targetW) / 2).coerceAtLeast(0)
-        val y = ((scaled.height - targetH) / 2).coerceAtLeast(0)
+        val y = ((scaled.height - targetW) / 2).coerceAtLeast(0)
         val cropped = Bitmap.createBitmap(
             scaled,
             x,
@@ -1121,7 +1585,6 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         val appCtx = requireContext().applicationContext
         scanner.execute {
             val result = VideoScanner.scan(appCtx)
-            // پیش‌بارگذاری فوری تصاویر بندانگشتی ذخیره‌شده روی دیسک به درون رم
             preloadDiskThumbnails(appCtx, result)
             if (!isAdded) return@execute
             requireActivity().runOnUiThread {
@@ -1196,22 +1659,21 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         var selected = criteria.indexOf(sortBy).coerceAtLeast(0)
         AlertDialog.Builder(requireContext())
             .setTitle(R.string.sort_by)
-            .setSingleChoiceItems(labels, selected) { _, which -> selected = which }
+            .setSingleChoiceItems(labels, selected) { d, which ->
+                selected = which
+                // لیبل دکمه جهت، هم‌زمان با انتخاب نوع مرتب‌سازی به‌روز شود
+                (d as? AlertDialog)?.getButton(AlertDialog.BUTTON_NEUTRAL)?.text =
+                    getString(directionLabelRes(criteria[which]))
+            }
             .setPositiveButton(R.string.dialog_ok) { d, _ ->
                 sortBy = criteria[selected]
-                // تایتل: پیش‌فرض صعودی (A اول) — بقیه: نزولی (جدیدترین اول)
+                // تایتل: پیش‌فرض صعودی (A اول) — بقیه: نزولی
                 if (sortBy == SortBy.TITLE) sortDescending = false
                 saveSortPref()
                 refreshDisplay()
                 d.dismiss()
             }
-            .setNeutralButton(
-                if (sortBy == SortBy.TITLE) {
-                    if (sortDescending) R.string.sort_order_za else R.string.sort_order_az
-                } else {
-                    if (sortDescending) R.string.sort_order_newest_first else R.string.sort_order_oldest_first
-                }
-            ) { d, _ ->
+            .setNeutralButton(directionLabelRes(sortBy)) { d, _ ->
                 sortDescending = !sortDescending
                 saveSortPref()
                 refreshDisplay()
@@ -1293,6 +1755,10 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
     }
 
     private fun playFile(filepath: String, resumeMs: Long = 0L) {
+        // آزادسازی فوری موتور کمکی mpv قبل از باز شدن MPVActivity
+        isPlayerActivityActive = true
+        shutdownMpvThumbnailer()
+
         val i: Intent
         if (filepath.startsWith("content://")) {
             i = Intent(Intent.ACTION_VIEW, Uri.parse(filepath))
@@ -1306,6 +1772,8 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
     }
 
     override fun onDestroy() {
+        isPlayerActivityActive = true
+        shutdownMpvThumbnailer()
         scanner.shutdown()
         diskCacheExecutor.shutdown()
         thumbDecodeExecutor.shutdown()

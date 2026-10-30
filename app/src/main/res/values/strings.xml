@@ -274,6 +274,10 @@
     <string name="sort_order_oldest_first">↑ Oldest first</string>
     <string name="sort_order_az">↓ A–Z</string>
     <string name="sort_order_za">↑ Z–A</string>
+    <string name="sort_order_longest_first">↓ Longest first</string>
+    <string name="sort_order_shortest_first">↑ Shortest first</string>
+    <string name="sort_order_largest_first">↓ Largest first</string>
+    <string name="sort_order_smallest_first">↑ Smallest first</string>
 
     <!-- Video badges -->
     <string name="badge_sub">SRT</string>

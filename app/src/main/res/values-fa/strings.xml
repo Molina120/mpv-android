@@ -252,6 +252,10 @@
     <string name="sort_order_oldest_first">↑ قدیمی‌ترین اول</string>
     <string name="sort_order_az">↓ A–Z</string>
     <string name="sort_order_za">↑ Z–A</string>
+    <string name="sort_order_longest_first">↓ طولانی‌ترین اول</string>
+    <string name="sort_order_shortest_first">↑ کوتاه‌ترین اول</string>
+    <string name="sort_order_largest_first">↓ حجیم‌ترین اول</string>
+    <string name="sort_order_smallest_first">↑ کم‌حجم‌ترین اول</string>
 
     <!-- Video badges -->
     <string name="badge_sub">SRT</string>
