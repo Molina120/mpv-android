@@ -21,6 +21,14 @@ object SubtitleNormalizer : MPVLib.EventObserver {
     private var lastRawSub: String = ""
     private var previewMode: Boolean = false
 
+    /**
+     * حالت عبور ASS: وقتی ترک زیرنویس فعلی ASS/SSA است، شخصی‌سازی و نرمالایز
+     * هیچ تأثیری ندارد و mpv آن را دقیقاً با استایل خودش رندر می‌کند.
+     */
+    @Volatile
+    var assPassthrough: Boolean = false
+        private set
+
     // مقادیر استایل که از SubtitleStyleManager دریافت می‌شوند
     @Volatile private var styleFontSize: Int = 55
     @Volatile private var styleSubPos: Int = 100
@@ -78,12 +86,106 @@ object SubtitleNormalizer : MPVLib.EventObserver {
 
     fun updateLiveSubtitle(rawSubText: String?) {
         val text = rawSubText ?: ""
+        // در حالت ASS، اورلی خاموش است و mpv با استایل اصلی فایل رندر می‌کند
+        if (assPassthrough) {
+            if (text != lastRawSub) {
+                lastRawSub = text
+                MpvBg.postLatest("norm-sub") { MPVLib.command(arrayOf("script-message", "norm-sub", "")) }
+            }
+            return
+        }
         if (text == lastRawSub && !previewMode) return
         lastRawSub = text
         renderSubtitleInternal(text)
     }
 
+    /**
+     * بررسی ASS بودن ترک زیرنویس فعلی و به‌روزرسانی حالت رندر.
+     * در حالت ASS: اورلی خاموش و sub-ass-override=no تا استایل اصلی فایل اعمال شود.
+     * در غیر این صورت: sub-ass-override=strip و رندر با اورلی شخصی‌سازی‌شده.
+     * هنگام تغییر ترک (sid) و لود فایل صدا زده می‌شود.
+     */
+    fun updateAssMode() {
+        val isAss = isCurrentSubAss()
+        if (isAss == assPassthrough) return
+        assPassthrough = isAss
+        Log.d(TAG, "ASS passthrough mode: $isAss")
+        MpvBg.post {
+            try {
+                MPVLib.setPropertyString("sub-ass-override", if (isAss) "no" else "strip")
+            } catch (e: Exception) {
+                Log.w(TAG, "sub-ass-override switch failed", e)
+            }
+        }
+        if (isAss) {
+            lastRawSub = ""
+            MpvBg.postLatest("norm-sub") { MPVLib.command(arrayOf("script-message", "norm-sub", "")) }
+        } else {
+            refreshCurrentSubtitle()
+        }
+    }
+
+    private fun isCurrentSubAss(): Boolean {
+        try {
+            val n = MPVLib.getPropertyInt("track-list/count") ?: return false
+            for (i in 0 until n) {
+                if (MPVLib.getPropertyString("track-list/$i/type") != "sub") continue
+                if (MPVLib.getPropertyBoolean("track-list/$i/selected") != true) continue
+                val codec = MPVLib.getPropertyString("track-list/$i/codec") ?: ""
+                if (codec.equals("ass", ignoreCase = true) || codec.equals("ssa", ignoreCase = true))
+                    return true
+                val extFile = MPVLib.getPropertyString("track-list/$i/external-filename") ?: ""
+                if (extFile.endsWith(".ass", ignoreCase = true) || extFile.endsWith(".ssa", ignoreCase = true))
+                    return true
+                return false
+            }
+        } catch (_: Exception) {}
+        return false
+    }
+
+    /**
+     * جبران نبود mirror در bidi موتور libass: در متن راست‌به‌چپ، جفت‌کاراکترهای
+     * آینه‌ای را از قبل جابه‌جا می‌کنیم تا خروجی نهایی درست دیده شود.
+     * (تست‌شده با libass واقعی: بدون این کار پرانتزها جابه‌جا نمایش داده می‌شوند)
+     */
+    private fun mirrorForLibass(s: String): String {
+        var hasRtl = false
+        for (c in s) {
+            val d = Character.getDirectionality(c)
+            if (d == Character.DIRECTIONALITY_RIGHT_TO_LEFT ||
+                d == Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC) {
+                hasRtl = true
+                break
+            }
+        }
+        if (!hasRtl) return s
+        val sb = StringBuilder(s.length)
+        for (c in s) {
+            sb.append(
+                when (c) {
+                    '(' -> ')'
+                    ')' -> '('
+                    '[' -> ']'
+                    ']' -> '['
+                    '{' -> '}'
+                    '}' -> '{'
+                    '«' -> '»'
+                    '»' -> '«'
+                    '‹' -> '›'
+                    '›' -> '‹'
+                    else -> c
+                }
+            )
+        }
+        return sb.toString()
+    }
+
     private fun renderSubtitleInternal(rawText: String) {
+        // شخصی‌سازی روی ASS اثر ندارد
+        if (assPassthrough) {
+            MpvBg.postLatest("norm-sub") { MPVLib.command(arrayOf("script-message", "norm-sub", "")) }
+            return
+        }
         val effectiveText = if (rawText.isBlank() && previewMode) {
             "نمونه متن زیرنویس فارسی - ۱۲۳!"
         } else {
@@ -156,7 +258,7 @@ object SubtitleNormalizer : MPVLib.EventObserver {
                 .trim()
 
             if (cleanLine.isNotEmpty()) {
-                val norm = normalizeSubtitleLine(cleanLine)
+                val norm = mirrorForLibass(normalizeSubtitleLine(cleanLine))
                     .replace("\\", "\\\\")
                     .replace("{", "\\{")
                     .replace("}", "\\}")
@@ -221,6 +323,11 @@ object SubtitleNormalizer : MPVLib.EventObserver {
     // --- متدهای مربوط به پردازش فایل‌های زیرنویس جداگانه (External SRT) ---
 
     fun processSubtitlePath(context: Context, pathOrUri: String): String {
+        // ASS/SSA با استایل اصلی خودش نمایش داده می‌شود؛ هیچ پردازشی روی آن انجام نمی‌شود
+        if (pathOrUri.endsWith(".ass", ignoreCase = true) ||
+            pathOrUri.endsWith(".ssa", ignoreCase = true)) {
+            return pathOrUri
+        }
         try {
             val rawBytes: ByteArray? = if (pathOrUri.startsWith("content://")) {
                 context.contentResolver.openInputStream(Uri.parse(pathOrUri))?.use { it.readBytes() }
@@ -232,6 +339,8 @@ object SubtitleNormalizer : MPVLib.EventObserver {
             if (rawBytes == null || rawBytes.isEmpty()) return pathOrUri
 
             val content = readSubtitleText(rawBytes)
+            // تشخیص ASS از روی محتوا (برای content:// بدون پسوند)
+            if (content.trimStart().startsWith("[Script Info]", ignoreCase = true)) return pathOrUri
             if (!content.contains("-->")) return pathOrUri
 
             val fixedContent = normalizeSrt(content)
@@ -432,8 +541,11 @@ object SubtitleNormalizer : MPVLib.EventObserver {
 
     override fun eventProperty(property: String) {
         if (property == "sub-text" || property == "sid") {
-            val current = MPVLib.getPropertyString("sub-text") ?: ""
-            updateLiveSubtitle(current)
+            if (property == "sid") updateAssMode()
+            if (!assPassthrough || property == "sid") {
+                val current = MPVLib.getPropertyString("sub-text") ?: ""
+                updateLiveSubtitle(current)
+            }
         }
     }
 
@@ -441,8 +553,11 @@ object SubtitleNormalizer : MPVLib.EventObserver {
         if (property == "sub-text") {
             updateLiveSubtitle(value)
         } else if (property == "sid") {
-            val current = MPVLib.getPropertyString("sub-text") ?: ""
-            updateLiveSubtitle(current)
+            updateAssMode()
+            if (!assPassthrough) {
+                val current = MPVLib.getPropertyString("sub-text") ?: ""
+                updateLiveSubtitle(current)
+            }
         }
     }
 

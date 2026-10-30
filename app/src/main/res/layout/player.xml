@@ -214,6 +214,28 @@
             android:visibility="gone"
             tools:text="[gesture]" />
 
+        <!-- اسم فایل ویدیو هنگام پخش، بالا سمت چپ -->
+        <TextView
+            android:id="@+id/topFilename"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_alignParentTop="true"
+            android:layout_alignParentLeft="true"
+            android:layout_toLeftOf="@id/top_controls"
+            android:layout_marginTop="8dp"
+            android:layout_marginLeft="12dp"
+            android:layout_marginRight="8dp"
+            android:alpha="0.85"
+            android:background="#bf000000"
+            android:ellipsize="marquee"
+            android:marqueeRepeatLimit="marquee_forever"
+            android:padding="8dp"
+            android:scrollHorizontally="true"
+            android:singleLine="true"
+            android:textColor="#ffffff"
+            android:textSize="14sp"
+            android:visibility="gone" />
+
         <LinearLayout
             android:id="@+id/top_controls"
             style="?buttonBarStyle"

@@ -134,6 +134,7 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
 
         override fun run() {
             binding.topControls.animate().alpha(0f).setDuration(CONTROLS_FADE_DURATION)
+            binding.topFilename.animate().alpha(0f).setDuration(CONTROLS_FADE_DURATION)
             binding.controls.animate().alpha(0f).setDuration(CONTROLS_FADE_DURATION).setListener(listener)
         }
     }
@@ -751,14 +752,17 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         fadeHandler.removeCallbacks(fadeRunnable)
         binding.controls.animate().cancel()
         binding.topControls.animate().cancel()
+        binding.topFilename.animate().cancel()
 
         // reset controls alpha to be visible
         binding.controls.alpha = 1f
         binding.topControls.alpha = 1f
+        binding.topFilename.alpha = 1f
 
         if (binding.controls.visibility != View.VISIBLE) {
             binding.controls.visibility = View.VISIBLE
             binding.topControls.visibility = View.VISIBLE
+            binding.topFilename.visibility = View.VISIBLE
 
             if (this.statsFPS) {
                 updateStats()
@@ -782,6 +786,7 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         // see http://stackoverflow.com/a/12655713/2606891
         binding.controls.visibility = View.GONE
         binding.topControls.visibility = View.GONE
+        binding.topFilename.visibility = View.GONE
         binding.statsTextView.visibility = View.GONE
 
         val insetsController = WindowCompat.getInsetsController(window, window.decorView)
@@ -2167,6 +2172,27 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
     }
 
     /**
+     * نمایش اسم فایل ویدیو در بالای صفحه (سمت چپ) هنگام پخش.
+     * همراه با کنترل‌ها نمایش/مخفی می‌شود.
+     */
+    private fun updateTopFilename() {
+        try {
+            var name: String? = MPVLib.getPropertyString("media-title")
+            if (name.isNullOrEmpty()) {
+                val path = MPVLib.getPropertyString("path")
+                name = path?.substringAfterLast('/')?.substringAfterLast('\\')
+            }
+            if (!name.isNullOrEmpty()) {
+                binding.topFilename.text = name
+                // برای اسکرول خودکار (marquee) اسم‌های طولانی
+                binding.topFilename.isSelected = true
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "updateTopFilename failed", e)
+        }
+    }
+
+    /**
      * ادامه پخش از موقعیت ذخیره‌شده (یک‌بار، بعد از لود فایل).
      * روی ترد event اجرا می‌شود.
      */
@@ -2293,6 +2319,8 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         if (eventId == MpvEvent.MPV_EVENT_FILE_LOADED) {
             autoNormalizeSubtitles()
             autoLoadExternalTracks()
+            SubtitleNormalizer.updateAssMode()
+            updateTopFilename()
             applyPendingResume()
             scheduleThumbCapture()
             scheduleHwdecWatchdog()

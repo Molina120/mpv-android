@@ -204,6 +204,16 @@ object SkipRangeManager {
             updateStatusPreview(it?.toString() ?: "")
         }
 
+        // وقتی auto-skip خاموش است، گزینه‌های حالت خاکستری/غیرفعال باشند
+        fun updateModeEnabled(enabled: Boolean) {
+            radioSkipInside.isEnabled = enabled
+            radioKeepOnly.isEnabled = enabled
+        }
+        updateModeEnabled(switchSkipEnabled.isChecked)
+        switchSkipEnabled.setOnCheckedChangeListener { _, isChecked ->
+            updateModeEnabled(isChecked)
+        }
+
         AlertDialog.Builder(context)
             .setTitle(R.string.skip_title)
             .setView(view)
