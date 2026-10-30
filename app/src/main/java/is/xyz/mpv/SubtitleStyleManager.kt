@@ -176,6 +176,7 @@ object SubtitleStyleManager {
         val view = LayoutInflater.from(context).inflate(R.layout.dialog_subtitle_style, null)
 
         val txtSubSize = view.findViewById<TextView>(R.id.txtSubSize)
+        val scrollSubStyle = view.findViewById<ScrollView>(R.id.scrollSubStyle)
         val seekSubSize = view.findViewById<SeekBar>(R.id.seekSubSize)
         val txtSubPos = view.findViewById<TextView>(R.id.txtSubPos)
         val seekSubPos = view.findViewById<SeekBar>(R.id.seekSubPos)
@@ -352,6 +353,22 @@ object SubtitleStyleManager {
                 onDismiss()
             }
             .create()
-            .show()
+            .also { alertDialog ->
+                alertDialog.show()
+                // همیشه از بالای منو شروع شود (گاهی فوکوس روی اسپینر، اسکرول را پایین می‌برد)
+                scrollSubStyle.post { scrollSubStyle.scrollTo(0, 0) }
+                // در حالت افقی، دیالوگ از صفحه بلندتر می‌شود و دکمه‌ها می‌افتند بیرون؛
+                // ارتفاع پنجره را محدود کن تا دکمه‌ها دیده شوند و محتوا اسکرول بخورد
+                alertDialog.window?.decorView?.post {
+                    val win = alertDialog.window ?: return@post
+                    val decorH = win.decorView.height
+                    val maxH = (context.resources.displayMetrics.heightPixels * 0.94).toInt()
+                    if (decorH > maxH) {
+                        val lp = win.attributes
+                        lp.height = maxH
+                        win.attributes = lp
+                    }
+                }
+            }
     }
 }

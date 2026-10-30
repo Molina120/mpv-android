@@ -1404,6 +1404,8 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
 
     private fun openTopMenu() {
         val restoreState = pauseForDialog()
+        // کلید ویدیوی فعلی برای حافظه ترک‌های خارجی (یک بار، موقع باز شدن منو)
+        val videoKey: String? = try { MPVLib.getPropertyString("path") } catch (e: Exception) { null }
 
         fun addExternalThing(cmd: String, result: Int, data: Intent?) {
             if (result != RESULT_OK)
@@ -1419,6 +1421,23 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             else
                 path2
             MPVLib.command(arrayOf(cmd, finalPath, "cached"))
+
+            // یادآوری ترک خارجی برای این ویدیو تا دفعه بعد خودکار اضافه شود؛
+            // برای زیرنویس مسیر اصلی (قبل از نرمالایز) ذخیره می‌شود
+            if (videoKey != null) {
+                if (path.startsWith("content://")) {
+                    try {
+                        contentResolver.takePersistableUriPermission(
+                            Uri.parse(path), Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        )
+                    } catch (e: Exception) {
+                        Log.w(TAG, "persistable URI permission not granted: $e")
+                    }
+                }
+                ExternalTrackMemory.remember(
+                    this, videoKey, if (cmd == "sub-add") "sub" else "audio", path2
+                )
+            }
         }
 
         /******/
@@ -2046,6 +2065,38 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
     }
 
     /**
+     * بارگذاری خودکار ترک‌های خارجیِ قبلاً ذخیره‌شده (زیرنویس/صدای دوبله) برای همین ویدیو.
+     * هنگام MPV_EVENT_FILE_LOADED فراخوانی می‌شود؛ روی ترد event اجرا می‌شود.
+     */
+    private fun autoLoadExternalTracks() {
+        try {
+            val videoKey = MPVLib.getPropertyString("path") ?: return
+            val tracks = ExternalTrackMemory.getTracks(this, videoKey)
+            if (tracks.isEmpty()) return
+
+            // ترک‌هایی که همین حالا لود هستند تا تکراری اضافه نشوند
+            val existing = mutableSetOf<String>()
+            val count = MPVLib.getPropertyInt("track-list/count") ?: 0
+            for (i in 0 until count) {
+                MPVLib.getPropertyString("track-list/$i/external-filename")?.let { existing.add(it) }
+            }
+
+            for (t in tracks) {
+                if (t.path in existing) continue
+                // فایل‌های پاک‌شده/جابه‌جا شده نادیده گرفته می‌شوند
+                if (!t.path.startsWith("content://") && !File(t.path).exists()) continue
+                val cmd = if (t.isSub) "sub-add" else "audio-add"
+                val p = if (t.isSub) SubtitleNormalizer.processSubtitlePath(this, t.path) else t.path
+                if (p in existing) continue
+                MPVLib.command(arrayOf(cmd, p, "cached"))
+                existing.add(p)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to auto-load external tracks", e)
+        }
+    }
+
+    /**
      * رهگیری خودکار زیرنویس‌ها: هر زیرنویس خارجی را نرمالایز و جایگزین می‌کند.
      * هنگام MPV_EVENT_FILE_LOADED فراخوانی می‌شود.
      */
@@ -2091,6 +2142,7 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         // اصلاح و جایگزینی زیرنویس به محض لود شدن کامل ویدیو و ترک‌ها
         if (eventId == MpvEvent.MPV_EVENT_FILE_LOADED) {
             autoNormalizeSubtitles()
+            autoLoadExternalTracks()
         }
 
         if (eventId == MpvEvent.MPV_EVENT_START_FILE) {
