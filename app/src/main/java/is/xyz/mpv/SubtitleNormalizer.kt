@@ -12,6 +12,10 @@ import java.util.Locale
 object SubtitleNormalizer : MPVLib.EventObserver {
 
     private const val TAG = "SubtitleNormalizer"
+
+    // ارتفاع خط فاصله (بر حسب واحد ASS) بین کادرهای دو خط. با ۸ تقریباً بدون فاصله و بدون هم‌پوشانی،
+    // با ۱۴ حدود ۶ پیکسل فاصله. اگر هنوز کادرها روی هم رفتند عدد را بیشتر کنید.
+    private const val BOX_GAP_FS = 14
     private val PUNCT_SET = setOf('.', '!', '?', '؟', '،', ':', ';', '؛')
 
     private var lastRawSub: String = ""
@@ -111,11 +115,39 @@ object SubtitleNormalizer : MPVLib.EventObserver {
         return "&HFFFFFF&"
     }
 
+    private fun boxAlphaFor(bgId: String): String? = when (bgId) {
+        "quarter_25" -> "C0"
+        "semi_50" -> "80"
+        "dark_75" -> "40"
+        "solid_100" -> "00"
+        else -> null // transparent: outline + shadow, no box
+    }
+
+    /**
+     * در حالت کادر، libass کادر هر خط را با پدینگ \bord می‌کشد و خطوط بدون فاصله کنار هم می‌آیند،
+     * پس کادر خط دوم روی خط اول می‌افتد. بین خطوط یک خط فاصلهٔ کاملاً شفاف می‌گذاریم.
+     */
+    private fun joinLines(lines: List<String>, bgId: String): String {
+        val boxAlpha = boxAlphaFor(bgId)
+        if (boxAlpha == null || lines.size < 2) return lines.joinToString("\\N")
+
+        val sb = StringBuilder()
+        for ((i, line) in lines.withIndex()) {
+            if (i > 0) {
+                // خط فاصله: متن و کادرش شفاف‌اند و فقط ارتفاع فاصله می‌سازند
+                sb.append("\\N{\\fs$BOX_GAP_FS\\1a&HFF&\\3a&HFF&\\4a&HFF&} \\N")
+                // ویژگی‌های خط اصلی را برای خط بعدی برمی‌گردانیم
+                sb.append("{\\fs$styleFontSize\\1a&H00&\\3a&H$boxAlpha&\\4a&H$boxAlpha&}")
+            }
+            sb.append(line)
+        }
+        return sb.toString()
+    }
+
     private fun formatForAssOverlay(rawText: String): String {
         val hasExplicitTopTag = rawText.contains("\\an8") || rawText.contains("\\a6")
         val lines = rawText.split(Regex("\\r?\\n"))
         val normalizedLines = mutableListOf<String>()
-        val measureLines = mutableListOf<String>()
 
         for (rawLine in lines) {
             val cleanLine = rawLine
@@ -125,31 +157,25 @@ object SubtitleNormalizer : MPVLib.EventObserver {
 
             if (cleanLine.isNotEmpty()) {
                 val norm = normalizeSubtitleLine(cleanLine)
-                // نسخه بدون اسکیپ برای اندازه‌گیری عرض واقعی متن
-                measureLines.add(norm)
-                normalizedLines.add(
-                    norm.replace("\\", "\\\\")
-                        .replace("{", "\\{")
-                        .replace("}", "\\}")
-                )
+                    .replace("\\", "\\\\")
+                    .replace("{", "\\{")
+                    .replace("}", "\\}")
+                normalizedLines.add(norm)
             }
         }
 
         if (normalizedLines.isEmpty()) return ""
 
-        val joinedText = normalizedLines.joinToString("\\N")
+        val joinedText = joinLines(normalizedLines, styleBgId)
 
         // محاسبهٔ موقعیت عمودی در رزولوشن 1280x720 بر اساس درصد (0 = بالا، 100 = پایین)
-        val isTopAligned: Boolean
-        val yPos: Int
-        if (hasExplicitTopTag && !styleAssOverride) {
-            isTopAligned = true
-            yPos = 50
+        val alignAndPos = if (hasExplicitTopTag && !styleAssOverride) {
+            "\\an8\\pos(640,50)"
         } else {
-            yPos = (36 + (styleSubPos / 100.0) * (720 - 72)).toInt().coerceIn(36, 684)
-            isTopAligned = styleSubPos < 15
+            val yPos = (36 + (styleSubPos / 100.0) * (720 - 72)).toInt().coerceIn(36, 684)
+            val alignment = if (styleSubPos < 15) "\\an8" else "\\an2"
+            "$alignment\\pos(640,$yPos)"
         }
-        val alignAndPos = (if (isTopAligned) "\\an8" else "\\an2") + "\\pos(640,$yPos)"
 
         // رنگ متن اصلی
         val primaryColor = hexToAssBgr(styleColorHex)
@@ -157,60 +183,39 @@ object SubtitleNormalizer : MPVLib.EventObserver {
         // وزن فونت (در libass مقدار 900 باعث اعمال قطعی Synthetic Bold روی فونت می‌شود)
         val boldTag = if (styleBold) "\\b900" else "\\b0"
 
-        // حاشیه و سایه متن؛ کادر جداگانه libass برای هر خط غیرفعال است
-        // (استایل OSD همیشه outline-and-shadow) و کادر یکدست پایین‌تر رسم می‌شود
-        val bordStr = String.format(Locale.US, "%.1f", styleBorderSize)
-        val shadVal = if (styleBorderSize > 0.0) (styleBorderSize * 0.4).coerceIn(0.4, 2.5) else 0.0
-        val shadStr = String.format(Locale.US, "%.1f", shadVal)
-        val textTags = "\\bord$bordStr\\shad$shadStr\\3c&H000000&\\3a&H00&\\4c&H000000&\\4a&H50&"
-
-        val stylePrefix = "{$alignAndPos\\fn${FontInstaller.FONT_FAMILY}\\fs$styleFontSize$boldTag$textTags\\1c$primaryColor\\1a&H00&\\q0}"
-        val textEvent = stylePrefix + joinedText
-
-        // کادر پس‌زمینه یکدست: یک مستطیل واحد پشت کل بلوک چندخطی
-        // (به‌جای کادر جداگانه libass برای هر خط که روی هم می‌افتادند و ناهماهنگ بودند)
-        val bgAlpha: String? = when (styleBgId) {
-            "quarter_25" -> "C0"
-            "semi_50" -> "80"
-            "dark_75" -> "40"
-            "solid_100" -> "00"
-            else -> null
-        }
-        if (bgAlpha == null) return textEvent
-
-        val boxPad = styleBorderSize.coerceAtLeast(3.5)
-        val padH = (boxPad * 2.0).toInt().coerceAtLeast(6)
-        val padV = boxPad.toInt().coerceAtLeast(4)
-
-        val paint = android.graphics.Paint().apply {
-            typeface = FontInstaller.subtitleTypeface
-            textSize = styleFontSize.toFloat()
-        }
-        var maxW = 0f
-        for (ml in measureLines) {
-            val m = ml.replace("\u200F", "").replace("\u202B", "").replace("\u202C", "")
-            if (paint.measureText(m) > maxW) maxW = paint.measureText(m)
-        }
-        val fm = paint.fontMetrics
-        val lineH = (fm.descent - fm.top).coerceAtLeast(styleFontSize * 1.2f)
-        val blockH = lineH * measureLines.size
-
-        val x0 = (640 - maxW / 2 - padH).toInt().coerceIn(8, 1272)
-        val x1 = (640 + maxW / 2 + padH).toInt().coerceIn(8, 1272)
-        val y0: Int
-        val y1: Int
-        if (isTopAligned) {
-            y0 = (yPos - padV).coerceIn(4, 716)
-            y1 = (yPos + blockH + padV).toInt().coerceIn(4, 716)
-        } else {
-            y1 = (yPos + padV).coerceIn(4, 716)
-            y0 = (yPos - blockH - padV).toInt().coerceIn(4, 716)
+        // تنظیم حاشیه، سایه و کادر پس‌زمینه
+        val borderAndBgTags = when (styleBgId) {
+            "quarter_25" -> {
+                val boxPad = styleBorderSize.coerceAtLeast(3.5)
+                val bordStr = String.format(Locale.US, "%.1f", boxPad)
+                "\\bord$bordStr\\shad0\\3c&H000000&\\3a&HC0&\\4c&H000000&\\4a&HC0&"
+            }
+            "semi_50" -> {
+                val boxPad = styleBorderSize.coerceAtLeast(3.5)
+                val bordStr = String.format(Locale.US, "%.1f", boxPad)
+                "\\bord$bordStr\\shad0\\3c&H000000&\\3a&H80&\\4c&H000000&\\4a&H80&"
+            }
+            "dark_75" -> {
+                val boxPad = styleBorderSize.coerceAtLeast(3.5)
+                val bordStr = String.format(Locale.US, "%.1f", boxPad)
+                "\\bord$bordStr\\shad0\\3c&H000000&\\3a&H40&\\4c&H000000&\\4a&H40&"
+            }
+            "solid_100" -> {
+                val boxPad = styleBorderSize.coerceAtLeast(3.5)
+                val bordStr = String.format(Locale.US, "%.1f", boxPad)
+                "\\bord$bordStr\\shad0\\3c&H000000&\\3a&H00&\\4c&H000000&\\4a&H00&"
+            }
+            else -> {
+                // حالت شفاف (بدون کادر، دارای حاشیه و سایه متناسب با اسلایدر کاربر)
+                val bordStr = String.format(Locale.US, "%.1f", styleBorderSize)
+                val shadVal = if (styleBorderSize > 0.0) (styleBorderSize * 0.4).coerceIn(0.4, 2.5) else 0.0
+                val shadStr = String.format(Locale.US, "%.1f", shadVal)
+                "\\bord$bordStr\\shad$shadStr\\3c&H000000&\\3a&H00&\\4c&H000000&\\4a&H50&"
+            }
         }
 
-        val rectEvent =
-            "{\\an7\\pos(0,0)\\p1\\1c&H000000&\\1a&H$bgAlpha&}m $x0 $y0 l $x1 $y0 l $x1 $y1 l $x0 $y1{\\p0}"
-        // مستطیل اول (پشت) و سپس متن، هر کدام یک ایونت جدا در همان اورلی
-        return rectEvent + "\n" + textEvent
+        val stylePrefix = "{$alignAndPos\\fn${FontInstaller.FONT_FAMILY}\\fs$styleFontSize$boldTag$borderAndBgTags\\1c$primaryColor\\1a&H00&\\q0}"
+        return stylePrefix + joinedText
     }
 
     // --- متدهای مربوط به پردازش فایل‌های زیرنویس جداگانه (External SRT) ---

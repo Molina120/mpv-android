@@ -87,17 +87,24 @@ object SubtitleStyleManager {
     }
 
     private fun applyOsdBoxOptions(bgId: String, isInit: Boolean) {
-        // کادر پس‌زمینه به‌صورت یک مستطیل واحد در خودِ اورلی رسم می‌شود
-        // (SubtitleNormalizer)؛ پس استایل OSD همیشه outline-and-shadow می‌ماند
-        // تا libass برای هر خط کادر جداگانه نکشد. bgId دیگر روی OSD اثر ندارد.
+        // در معماری کادر per-line در libass، استایل OSD باید opaque-box باشد تا کادر کشیده شود
+        val borderStyle = if (bgId == "transparent") "outline-and-shadow" else "opaque-box"
+        val backColor = when (bgId) {
+            "quarter_25" -> "#40000000"
+            "semi_50" -> "#80000000"
+            "dark_75" -> "#BF000000"
+            "solid_100" -> "#FF000000"
+            else -> "#00000000"
+        }
+
         if (isInit) {
-            MPVLib.setOptionString("osd-border-style", "outline-and-shadow")
-            MPVLib.setOptionString("osd-back-color", "#00000000")
+            MPVLib.setOptionString("osd-border-style", borderStyle)
+            MPVLib.setOptionString("osd-back-color", backColor)
         } else {
-            // روی ترد پس‌زمینه تا ترد UI قفل نشود
+            // روی ترد پس‌زمینه تا ترد UI با فراخوانی مسدودکننده mpv قفل نشود
             MpvBg.post {
-                MPVLib.setPropertyString("osd-border-style", "outline-and-shadow")
-                MPVLib.setPropertyString("osd-back-color", "#00000000")
+                MPVLib.setPropertyString("osd-border-style", borderStyle)
+                MPVLib.setPropertyString("osd-back-color", backColor)
             }
         }
     }
