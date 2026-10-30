@@ -23,7 +23,8 @@ object ThumbDiskCache {
     private const val KEY_FAILED = "failed_ids"
 
     fun file(context: Context, videoId: Long): File {
-        val dir = File(context.cacheDir, DIR).apply { mkdirs() }
+        // حافظه دائمی filesDir: برخلاف cacheDir توسط سیستم/بهینه‌سازها پاک نمی‌شود
+        val dir = File(context.filesDir, DIR).apply { mkdirs() }
         return File(dir, "thumb_$videoId.jpg")
     }
 
