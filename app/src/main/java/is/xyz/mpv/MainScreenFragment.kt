@@ -9,7 +9,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.media.MediaMetadataRetriever
 import android.net.Uri
@@ -35,8 +34,6 @@ import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import java.io.File
-import java.io.FileOutputStream
 import java.util.concurrent.Executors
 import kotlin.math.max
 
@@ -110,14 +107,17 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         return if (sortDescending) sorted.reversed() else sorted
     }
 
-    private fun sortedVideos(folder: VideoScanner.Folder): List<VideoScanner.Video> {
+    private fun sortedVideos(folder: VideoScanner.Folder): List<VideoScanner.Video> =
+        sortVideoList(folder.videos)
+
+    private fun sortVideoList(videos: List<VideoScanner.Video>): List<VideoScanner.Video> {
         val cmp: Comparator<VideoScanner.Video> = when (sortBy) {
             SortBy.TITLE -> compareBy { it.name.lowercase() }
             SortBy.DATE -> compareBy { it.dateModifiedSec }
             SortBy.DURATION -> compareBy { it.durationMs }
             SortBy.SIZE -> compareBy { it.sizeBytes }
         }
-        val sorted = folder.videos.sortedWith(cmp)
+        val sorted = videos.sortedWith(cmp)
         return if (sortDescending) sorted.reversed() else sorted
     }
 
@@ -222,6 +222,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             when (item.itemId) {
                 R.id.menu_refresh -> {
                     synchronized(thumbFailed) { thumbFailed.clear() }
+                    ThumbDiskCache.clearAllFailed(requireContext().applicationContext)
                     loadVideos()
                     true
                 }
@@ -368,9 +369,11 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
 
     // ---------- مدیریت پیشرفته بندانگشتی‌ها ----------
 
-    private fun getDiskCacheFile(appCtx: Context, video: VideoScanner.Video): File {
-        val dir = File(appCtx.cacheDir, "video_thumbs_v2").apply { mkdirs() }
-        return File(dir, "thumb_${video.id}_${video.dateModifiedSec}.jpg")
+    /** تشخیص HEVC از روی نام فایل (x265 ویدیوها معمولاً در پلتفرم دیکد نمی‌شوند) */
+    private fun isHevcName(name: String): Boolean {
+        val l = name.lowercase()
+        return l.contains("x265") || l.contains("hevc") || l.contains("h265") ||
+                l.contains("h.265") || l.contains("10bit")
     }
 
     /** لود تنبل بندانگشتی با کش رم و دیسک و فیلتر کردن فریم‌های سیاه */
@@ -387,21 +390,23 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         }
 
         val appCtx = requireContext().applicationContext
+        if (ThumbDiskCache.isFailed(appCtx, video.id)) {
+            synchronized(thumbFailed) { thumbFailed.add(video.id) }
+            return
+        }
+
         thumbExecutor.execute {
             // اگر کاربر اسکرول کرده و این ImageView اکنون به ویدیوی دیگری تعلق دارد، ادامه نده
             if (imageView.tag != video.id) return@execute
 
             try {
-                // ۱. بررسی کش دیسک
-                val cacheFile = getDiskCacheFile(appCtx, video)
-                if (cacheFile.exists() && cacheFile.length() > 0) {
-                    BitmapFactory.decodeFile(cacheFile.absolutePath)?.let { cachedBmp ->
-                        thumbCache.put(video.id, cachedBmp)
-                        imageView.post {
-                            if (imageView.tag == video.id) imageView.setImageBitmap(cachedBmp)
-                        }
-                        return@execute
+                // ۱. بررسی کش دیسک (مشترک با پلیر — x265ها موقع پخش اینجا ذخیره می‌شوند)
+                ThumbDiskCache.load(appCtx, video.id)?.let { cachedBmp ->
+                    thumbCache.put(video.id, cachedBmp)
+                    imageView.post {
+                        if (imageView.tag == video.id) imageView.setImageBitmap(cachedBmp)
                     }
+                    return@execute
                 }
 
                 // ۲. استخراج مستقیم فریم باکیفیت و غیرسیاه از ویدیو (مناسب فایل‌های حجیم و MKV)
@@ -416,29 +421,48 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                     }
                 }
 
+                // ۴. آخرین تلاش: ThumbnailUtils (مسیر متفاوت سیستم، گاهی HEVC را می‌گیرد)
+                if (rawBmp == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    rawBmp = try {
+                        var pfd2: android.os.ParcelFileDescriptor? = null
+                        try {
+                            pfd2 = appCtx.contentResolver.openFileDescriptor(video.uri, "r")
+                            val real = pfd2?.let { Utils.findRealPath(it.fd) }
+                            if (real != null) {
+                                android.media.ThumbnailUtils.createVideoThumbnail(
+                                    java.io.File(real), Size(560, 360), null
+                                )
+                            } else null
+                        } finally {
+                            try { pfd2?.close() } catch (_: Exception) { }
+                        }
+                    } catch (_: Exception) { null }
+                }
+
                 if (rawBmp != null) {
                     val finalBmp = scaleCenterCrop(rawBmp, THUMB_WIDTH, THUMB_HEIGHT)
                     if (finalBmp !== rawBmp) rawBmp.recycle()
 
                     thumbCache.put(video.id, finalBmp)
                     // ذخیره در کش دیسک با کیفیت بالا
-                    try {
-                        FileOutputStream(cacheFile).use { out ->
-                            finalBmp.compress(Bitmap.CompressFormat.JPEG, 92, out)
-                        }
-                    } catch (_: Exception) { }
+                    ThumbDiskCache.save(appCtx, video.id, finalBmp)
 
                     imageView.post {
                         if (imageView.tag == video.id) imageView.setImageBitmap(finalBmp)
                     }
                 } else {
-                    synchronized(thumbFailed) { thumbFailed.add(video.id) }
+                    markThumbFailed(appCtx, video.id)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "thumbnail failed: ${video.name}", e)
-                synchronized(thumbFailed) { thumbFailed.add(video.id) }
+                markThumbFailed(appCtx, video.id)
             }
         }
+    }
+
+    private fun markThumbFailed(appCtx: Context, videoId: Long) {
+        synchronized(thumbFailed) { thumbFailed.add(videoId) }
+        ThumbDiskCache.markFailed(appCtx, videoId)
     }
 
     /** استخراج فریم از ویدیو با پشتیبانی از فایل‌های بالای ۴ گیگابایت، 4K HDR و رد کردن فریم‌های سیاه */
@@ -473,8 +497,10 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             }
 
             // لیست زمان‌های کاندید (برحسب میکروثانیه) برای فرار از تیتراژ و فریم‌های سیاه
+            // برای HEVC (که پلتفرم معمولاً دیکد نمی‌کند) فقط ۳ تلاش — بندانگشتی موقع پخش گرفته می‌شود
+            val hevc = isHevcName(video.name)
             val candidatesUs = if (durationMs > 10_000L) {
-                longArrayOf(
+                val base = longArrayOf(
                     durationMs * 150L, // 15%
                     durationMs * 250L, // 25%
                     durationMs * 350L, // 35%
@@ -484,6 +510,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                     10_000_000L,       // 10s
                     3_000_000L         // 3s
                 )
+                if (hevc) base.take(3).toLongArray() else base
             } else {
                 longArrayOf(
                     30_000_000L,
@@ -662,15 +689,24 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
     private fun showFolders() {
         openFolder = null
         backCallback.isEnabled = false
-        binding.toolbar.title = getString(R.string.browser_folders)
-        binding.toolbar.subtitle = null
         binding.toolbar.navigationIcon = null
         val adapter = binding.videoList.adapter as BrowserAdapter
         val q = searchQuery
-        val list = sortedFolders()
-            .filter { q.isEmpty() || it.name.contains(q, ignoreCase = true) }
-        adapter.items = list.map { BrowserItem.FolderRow(it) }
-        binding.emptyView.isVisible = list.isEmpty()
+        if (q.isEmpty()) {
+            binding.toolbar.title = getString(R.string.browser_folders)
+            binding.toolbar.subtitle = null
+            val list = sortedFolders()
+            adapter.items = list.map { BrowserItem.FolderRow(it) }
+            binding.emptyView.isVisible = list.isEmpty()
+        } else {
+            // جستجو: ویدیوهای همه پوشه‌ها (نه فقط اسم پوشه)
+            binding.toolbar.title = getString(R.string.browser_search_results)
+            binding.toolbar.subtitle = q
+            val list = sortVideoList(folders.flatMap { it.videos })
+                .filter { it.name.contains(q, ignoreCase = true) }
+            adapter.items = list.map { BrowserItem.VideoRow(it) }
+            binding.emptyView.isVisible = list.isEmpty()
+        }
         binding.videoList.scrollToPosition(0)
     }
 
@@ -705,12 +741,18 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             .setSingleChoiceItems(labels, selected) { _, which -> selected = which }
             .setPositiveButton(R.string.dialog_ok) { d, _ ->
                 sortBy = criteria[selected]
+                // تایتل: پیش‌فرض صعودی (A اول) — بقیه: نزولی (جدیدترین اول)
+                if (sortBy == SortBy.TITLE) sortDescending = false
                 saveSortPref()
                 refreshDisplay()
                 d.dismiss()
             }
             .setNeutralButton(
-                if (sortDescending) R.string.sort_order_newest_first else R.string.sort_order_oldest_first
+                if (sortBy == SortBy.TITLE) {
+                    if (sortDescending) R.string.sort_order_za else R.string.sort_order_az
+                } else {
+                    if (sortDescending) R.string.sort_order_newest_first else R.string.sort_order_oldest_first
+                }
             ) { d, _ ->
                 sortDescending = !sortDescending
                 saveSortPref()

@@ -230,6 +230,7 @@
 
     <!-- Video browser (MX-style main screen) -->
     <string name="browser_folders">پوشه‌ها</string>
+    <string name="browser_search_results">نتایج جستجو</string>
     <string name="browser_no_videos">ویدیویی در این دستگاه پیدا نشد</string>
     <string name="browser_permission_rationale">برای پیدا کردن و نمایش ویدیوها، mpv به دسترسی فایل‌های رسانه‌ای دستگاه نیاز دارد.</string>
     <string name="browser_grant_access">دادن دسترسی</string>
@@ -249,6 +250,8 @@
     <string name="sort_size">حجم</string>
     <string name="sort_order_newest_first">↓ جدیدترین اول</string>
     <string name="sort_order_oldest_first">↑ قدیمی‌ترین اول</string>
+    <string name="sort_order_az">↓ A–Z</string>
+    <string name="sort_order_za">↑ Z–A</string>
 
     <!-- Video badges -->
     <string name="badge_sub">SRT</string>

@@ -252,6 +252,7 @@
 
     <!-- Video browser (MX-style main screen) -->
     <string name="browser_folders">Folders</string>
+    <string name="browser_search_results">Search results</string>
     <string name="browser_no_videos">No videos found on this device</string>
     <string name="browser_permission_rationale">To find and list your videos, mpv needs access to media files on this device.</string>
     <string name="browser_grant_access">Allow access</string>
@@ -271,6 +272,8 @@
     <string name="sort_size">Size</string>
     <string name="sort_order_newest_first">↓ Newest first</string>
     <string name="sort_order_oldest_first">↑ Oldest first</string>
+    <string name="sort_order_az">↓ A–Z</string>
+    <string name="sort_order_za">↑ Z–A</string>
 
     <!-- Video badges -->
     <string name="badge_sub">SRT</string>

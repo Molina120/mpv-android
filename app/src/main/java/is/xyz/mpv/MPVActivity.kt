@@ -2184,10 +2184,41 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
     }
 
     /**
+     * گرفتن بندانگشتی از فریم در حال پخش و ذخیره در کش دیسک مرورگر.
+     * برای x265ها که پلتفرم دیکد نمی‌کند: کاربر یک‌بار ویدیو را پخش می‌کند و
+     * از آن به بعد بندانگشتی در مرورگر نمایش داده می‌شود.
+     */
+    private var thumbCaptureToken = 0
+    private fun scheduleThumbCapture() {
+        val vid = intentVideoId ?: return
+        val appCtx = applicationContext
+        if (ThumbDiskCache.exists(appCtx, vid)) return
+        val token = ++thumbCaptureToken
+        eventUiHandler.postDelayed({
+            if (token != thumbCaptureToken || isFinishing || isDestroyed) return@postDelayed
+            if (ThumbDiskCache.exists(appCtx, vid)) return@postDelayed
+            MpvBg.post {
+                try {
+                    // فقط وقتی ویدیو واقعاً در حال پخش است
+                    val fmt = MPVLib.getPropertyString("video-format")
+                    if (fmt.isNullOrEmpty()) return@post
+                    val bmp = MPVLib.grabThumbnail(560) ?: return@post
+                    if (!ThumbDiskCache.isDark(bmp)) {
+                        if (ThumbDiskCache.save(appCtx, vid, bmp))
+                            ThumbDiskCache.clearFailed(appCtx, vid)
+                    }
+                    try { bmp.recycle() } catch (_: Exception) { }
+                } catch (e: Exception) {
+                    Log.w(TAG, "thumb capture failed", e)
+                }
+            }
+        }, 8000)
+    }
+
+    /**
      * ذخیره وضعیت تماشا هنگام توقف/خروج از پخش (برای «ادامه پخش» در مرورگر).
      */
-    private fun saveWatchState() {
-        val vid = intentVideoId ?: return
+    private fun saveWatchState() {        val vid = intentVideoId ?: return
         try {
             val posMs = ((player.timePos ?: 0.0) * 1000).toLong().coerceAtLeast(0L)
             val durMs = psc.duration.coerceAtLeast(0L)
@@ -2213,6 +2244,7 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             autoNormalizeSubtitles()
             autoLoadExternalTracks()
             applyPendingResume()
+            scheduleThumbCapture()
         }
 
         if (eventId == MpvEvent.MPV_EVENT_START_FILE) {

@@ -45,6 +45,18 @@ class AboutActivity : AppCompatActivity(), MPVLib.LogObserver {
             return
         }
 
+        if (tempInstanceConsumed) {
+            // در این فرایند قبلاً یک نمونه موقت ساخته و نابود شده؛ ساخت نمونه
+            // دوم کرش می‌دهد. کش نسخه از همان نمونه اول پر شده است.
+            binding.logs.text = logs + (MpvVersionCache.info ?: "")
+            return
+        }
+
+        // نمونه موقت را فقط یک‌بار در هر فرایند می‌سازیم؛ کش نسخه را هم ثبت
+        // می‌کنیم تا بازدیدهای بعدی بدون ساخت نمونه کار کنند
+        MpvVersionCache.registerOnce()
+        tempInstanceConsumed = true
+
         // create mpv context to capture version info from log
         MPVLib.create(this)
         mpvDestroyed = false
@@ -77,5 +89,10 @@ class AboutActivity : AppCompatActivity(), MPVLib.LogObserver {
             MPVLib.removeLogObserver(this)
             updateLog()
         }
+    }
+
+    companion object {
+        // نمونه موقت mpv فقط یک‌بار در هر فرایند ساخته می‌شود؛ دومی کرش می‌دهد
+        private var tempInstanceConsumed = false
     }
 }
