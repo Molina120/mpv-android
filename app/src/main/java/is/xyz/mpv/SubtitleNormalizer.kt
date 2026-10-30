@@ -7,13 +7,58 @@ import `is`.xyz.mpv.MPVLib.MpvEvent
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
+import java.util.Locale
 
 object SubtitleNormalizer : MPVLib.EventObserver {
 
     private const val TAG = "SubtitleNormalizer"
     private val PUNCT_SET = setOf('.', '!', '?', '؟', '،', ':', ';', '؛')
 
-    private var lastRawSub: String? = null
+    private var lastRawSub: String = ""
+    private var previewMode: Boolean = false
+
+    // مقادیر استایل که از SubtitleStyleManager دریافت می‌شوند
+    @Volatile private var styleFontSize: Int = 55
+    @Volatile private var styleSubPos: Int = 100
+    @Volatile private var styleBorderSize: Double = 3.0
+    @Volatile private var styleBold: Boolean = false
+    @Volatile private var styleColorHex: String = "#FFFFFF"
+    @Volatile private var styleBgId: String = "transparent"
+    @Volatile private var styleAssOverride: Boolean = true
+
+    fun updateStyleConfig(
+        size: Int,
+        pos: Int,
+        border: Double,
+        bold: Boolean,
+        colorHex: String,
+        bgId: String,
+        assOverride: Boolean,
+        refreshNow: Boolean = true
+    ) {
+        styleFontSize = size.coerceIn(20, 100)
+        styleSubPos = pos.coerceIn(0, 100)
+        styleBorderSize = border.coerceIn(0.0, 6.0)
+        styleBold = bold
+        styleColorHex = colorHex
+        styleBgId = bgId
+        styleAssOverride = assOverride
+
+        if (refreshNow) {
+            refreshCurrentSubtitle()
+        }
+    }
+
+    fun setPreviewMode(enabled: Boolean) {
+        previewMode = enabled
+        refreshCurrentSubtitle()
+    }
+
+    fun refreshCurrentSubtitle() {
+        val current = MPVLib.getPropertyString("sub-text") ?: lastRawSub
+        lastRawSub = current
+        renderSubtitleInternal(current)
+    }
 
     fun attachToMpv() {
         MPVLib.removeObserver(this)
@@ -22,33 +67,53 @@ object SubtitleNormalizer : MPVLib.EventObserver {
 
     fun detachFromMpv() {
         MPVLib.removeObserver(this)
-        lastRawSub = null
+        lastRawSub = ""
+        previewMode = false
     }
 
-    /**
-     * رندر زیرنویس نرمالیزه‌شده (سافت‌ساب و اکسترنال) در لحظه از طریق موتور libass داخلی mpv
-     */
     fun updateLiveSubtitle(rawSubText: String?) {
         val text = rawSubText ?: ""
-        if (text == lastRawSub) return
+        if (text == lastRawSub && !previewMode) return
         lastRawSub = text
+        renderSubtitleInternal(text)
+    }
 
-        if (text.isBlank()) {
+    private fun renderSubtitleInternal(rawText: String) {
+        val effectiveText = if (rawText.isBlank() && previewMode) {
+            "نمونه متن زیرنویس فارسی - ۱۲۳!"
+        } else {
+            rawText
+        }
+
+        if (effectiveText.isBlank()) {
             MPVLib.command(arrayOf("script-message", "norm-sub", ""))
             return
         }
 
-        val assEvents = formatForAssOverlay(text)
+        val assEvents = formatForAssOverlay(effectiveText)
         MPVLib.command(arrayOf("script-message", "norm-sub", assEvents))
     }
 
+    /**
+     * تبدیل کد رنگ استاندارد #RRGGBB به فرمت &HBBGGRR& در استاندارد ASS
+     */
+    private fun hexToAssBgr(hex: String): String {
+        val clean = hex.trim().removePrefix("#")
+        if (clean.length == 6) {
+            val r = clean.substring(0, 2)
+            val g = clean.substring(2, 4)
+            val b = clean.substring(4, 6)
+            return "&H${b}${g}${r}&"
+        }
+        return "&HFFFFFF&"
+    }
+
     private fun formatForAssOverlay(rawText: String): String {
-        val isTopAligned = rawText.contains("\\an8") || rawText.contains("\\a6")
+        val hasExplicitTopTag = rawText.contains("\\an8") || rawText.contains("\\a6")
         val lines = rawText.split(Regex("\\r?\\n"))
         val normalizedLines = mutableListOf<String>()
 
         for (rawLine in lines) {
-            // حذف تگ‌های احتمالی HTML یا ASS از متن خام برای نرمالیزه شدن دقیق علائم
             val cleanLine = rawLine
                 .replace(Regex("\\{[^}]*\\}"), "")
                 .replace(Regex("<[^>]+>"), "")
@@ -66,14 +131,49 @@ object SubtitleNormalizer : MPVLib.EventObserver {
         if (normalizedLines.isEmpty()) return ""
 
         val joinedText = normalizedLines.joinToString("\\N")
-        val alignAndPos = if (isTopAligned) {
-            "\\an8\\pos(640,55)"
+
+        // محاسبهٔ موقعیت عمودی در رزولوشن 1280x720 بر اساس درصد (0 = بالا، 100 = پایین)
+        val alignAndPos = if (hasExplicitTopTag && !styleAssOverride) {
+            "\\an8\\pos(640,50)"
         } else {
-            "\\an2\\pos(640,680)"
+            val yPos = (36 + (styleSubPos / 100.0) * (720 - 72)).toInt().coerceIn(36, 684)
+            val alignment = if (styleSubPos < 15) "\\an8" else "\\an2"
+            "$alignment\\pos(640,$yPos)"
         }
 
-        // استایل استاندارد libass منطبق با فونت IRANSansX
-        val stylePrefix = "{$alignAndPos\\fnIRANSansX\\fs42\\b0\\bord2.2\\shad1.2\\1c&HFFFFFF&\\3c&H000000&\\4c&H000000&\\q0}"
+        // رنگ متن اصلی
+        val primaryColor = hexToAssBgr(styleColorHex)
+
+        // وزن فونت (در libass مقدار 900 باعث اعمال قطعی Synthetic Bold روی فونت می‌شود)
+        val boldTag = if (styleBold) "\\b900" else "\\b0"
+
+        // تنظیم حاشیه، سایه و کادر پس‌زمینه
+        val borderAndBgTags = when (styleBgId) {
+            "semi_50" -> {
+                val boxPad = styleBorderSize.coerceAtLeast(3.5)
+                val bordStr = String.format(Locale.US, "%.1f", boxPad)
+                "\\bord$bordStr\\shad0\\3c&H000000&\\3a&H80&\\4c&H000000&\\4a&H80&"
+            }
+            "dark_75" -> {
+                val boxPad = styleBorderSize.coerceAtLeast(3.5)
+                val bordStr = String.format(Locale.US, "%.1f", boxPad)
+                "\\bord$bordStr\\shad0\\3c&H000000&\\3a&H40&\\4c&H000000&\\4a&H40&"
+            }
+            "solid_100" -> {
+                val boxPad = styleBorderSize.coerceAtLeast(3.5)
+                val bordStr = String.format(Locale.US, "%.1f", boxPad)
+                "\\bord$bordStr\\shad0\\3c&H000000&\\3a&H00&\\4c&H000000&\\4a&H00&"
+            }
+            else -> {
+                // حالت شفاف (بدون کادر، دارای حاشیه و سایه متناسب با اسلایدر کاربر)
+                val bordStr = String.format(Locale.US, "%.1f", styleBorderSize)
+                val shadVal = if (styleBorderSize > 0.0) (styleBorderSize * 0.4).coerceIn(0.4, 2.5) else 0.0
+                val shadStr = String.format(Locale.US, "%.1f", shadVal)
+                "\\bord$bordStr\\shad$shadStr\\3c&H000000&\\3a&H00&\\4c&H000000&\\4a&H50&"
+            }
+        }
+
+        val stylePrefix = "{$alignAndPos\\fn${FontInstaller.FONT_FAMILY}\\fs$styleFontSize$boldTag$borderAndBgTags\\1c$primaryColor\\1a&H00&\\q0}"
         return stylePrefix + joinedText
     }
 
@@ -245,7 +345,6 @@ object SubtitleNormalizer : MPVLib.EventObserver {
             line = "- $line"
         }
 
-        // قفل کردن هر دو سمت خط با کاراکترهای قوی RTL برای جلوگیری از پرش علائم در libass
         return "\u200F\u202B$line\u202C\u200F"
     }
 

@@ -27,7 +27,7 @@ object SubtitleStyleManager {
     private const val DEFAULT_BG_COLOR = "transparent"
     private const val DEFAULT_ASS_OVERRIDE = true
 
-    private const val APPLY_DEBOUNCE_MS = 250L
+    private const val APPLY_DEBOUNCE_MS = 80L
 
     data class ColorOption(val nameRes: Int, val hex: String)
 
@@ -41,14 +41,13 @@ object SubtitleStyleManager {
         ColorOption(R.string.color_pink, "#FF69B4")
     )
 
-    data class BgOption(val nameRes: Int, val id: String, val assStyle: String)
+    data class BgOption(val nameRes: Int, val id: String)
 
-    // تنظیم دقیق کادر و رنگ بر اساس سینتکس ASS
     private val bgOptions = listOf(
-        BgOption(R.string.bg_transparent, "transparent", "BorderStyle=1"),
-        BgOption(R.string.bg_semi_50, "semi_50", "BorderStyle=3,BackColour=&H80000000,OutlineColour=&H80000000,Outline=4"),
-        BgOption(R.string.bg_dark_75, "dark_75", "BorderStyle=3,BackColour=&H40000000,OutlineColour=&H40000000,Outline=4"),
-        BgOption(R.string.bg_solid_100, "solid_100", "BorderStyle=3,BackColour=&H00000000,OutlineColour=&H00000000,Outline=4")
+        BgOption(R.string.bg_transparent, "transparent"),
+        BgOption(R.string.bg_semi_50, "semi_50"),
+        BgOption(R.string.bg_dark_75, "dark_75"),
+        BgOption(R.string.bg_solid_100, "solid_100")
     )
 
     fun applyInitialOptions(context: Context) {
@@ -61,25 +60,48 @@ object SubtitleStyleManager {
         val bgId = prefs.getString(PREF_SUB_BG_COLOR, DEFAULT_BG_COLOR) ?: DEFAULT_BG_COLOR
         val assOverride = prefs.getBoolean(PREF_SUB_ASS_OVERRIDE, DEFAULT_ASS_OVERRIDE)
 
+        // مخفی نگه داشتن لایهٔ خام زیرنویس mpv (چون رندر اصلی در SubtitleNormalizer انجام می‌شود)
         MPVLib.setOptionString("sub-font", FontInstaller.FONT_FAMILY)
-        MPVLib.setOptionString("sub-font-size", size.toString())
-        MPVLib.setOptionString("sub-pos", pos.toString())
-        MPVLib.setOptionString("sub-border-size", border.toString())
-        MPVLib.setOptionString("sub-bold", if (bold) "yes" else "no")
-        MPVLib.setOptionString("sub-color", color)
-        MPVLib.setOptionString("sub-ass-override", if (assOverride) "force" else "yes")
+        MPVLib.setOptionString("sub-color", "0/0/0/0")
+        MPVLib.setOptionString("sub-border-color", "0/0/0/0")
+        MPVLib.setOptionString("sub-shadow-color", "0/0/0/0")
+        MPVLib.setOptionString("sub-back-color", "0/0/0/0")
+        MPVLib.setOptionString("sub-ass-override", "strip")
+        MPVLib.setOptionString("sub-scale", "0.001")
 
-        val bgOpt = bgOptions.firstOrNull { it.id == bgId } ?: bgOptions[0]
-        MPVLib.setOptionString("sub-ass-style-overrides", bgOpt.assStyle)
+        // تنظیم استایل کادر پس‌زمینه برای لایهٔ OSD
+        applyOsdBoxOptions(bgId, isInit = true)
+
+        // انتقال تنظیمات استایل به نرمالایزر
+        SubtitleNormalizer.updateStyleConfig(
+            size = size,
+            pos = pos,
+            border = border,
+            bold = bold,
+            colorHex = color,
+            bgId = bgId,
+            assOverride = assOverride,
+            refreshNow = false
+        )
     }
 
-    private var lastSize: Int? = null
-    private var lastPos: Int? = null
-    private var lastBorder: Double? = null
-    private var lastBold: Boolean? = null
-    private var lastColor: String? = null
-    private var lastBgId: String? = null
-    private var lastAssOverride: Boolean? = null
+    private fun applyOsdBoxOptions(bgId: String, isInit: Boolean) {
+        val borderStyle = if (bgId == "transparent") "outline-and-shadow" else "opaque-box"
+        val backColor = when (bgId) {
+            "semi_50" -> "#80000000"
+            "dark_75" -> "#BF000000"
+            "solid_100" -> "#FF000000"
+            else -> "#00000000"
+        }
+
+        if (isInit) {
+            MPVLib.setOptionString("osd-border-style", borderStyle)
+            MPVLib.setOptionString("osd-back-color", backColor)
+        } else {
+            MPVLib.setPropertyString("osd-border-style", borderStyle)
+            MPVLib.setPropertyString("osd-back-color", backColor)
+        }
+    }
 
     private fun applyLiveProperties(
         size: Int,
@@ -88,54 +110,20 @@ object SubtitleStyleManager {
         bold: Boolean,
         color: String,
         bgId: String,
-        assOverride: Boolean,
-        forceAll: Boolean = false
+        assOverride: Boolean
     ) {
-        if (forceAll || lastSize != size) {
-            MPVLib.setPropertyInt("sub-font-size", size)
-            lastSize = size
-        }
-        if (forceAll || lastPos != pos) {
-            MPVLib.setPropertyInt("sub-pos", pos)
-            lastPos = pos
-        }
-        if (forceAll || lastBorder != border) {
-            MPVLib.setPropertyDouble("sub-border-size", border)
-            lastBorder = border
-        }
-        if (forceAll || lastBold != bold) {
-            MPVLib.setPropertyBoolean("sub-bold", bold)
-            lastBold = bold
-        }
-        if (forceAll || lastColor != color) {
-            MPVLib.setPropertyString("sub-color", color)
-            lastColor = color
-        }
-        if (forceAll || lastAssOverride != assOverride) {
-            MPVLib.setPropertyString("sub-ass-override", if (assOverride) "force" else "yes")
-            lastAssOverride = assOverride
-        }
-        if (forceAll || lastBgId != bgId) {
-            val bgOpt = bgOptions.firstOrNull { it.id == bgId } ?: bgOptions[0]
-            MPVLib.setPropertyString("sub-ass-style-overrides", bgOpt.assStyle)
-            reloadSubtitleTrack()
-            lastBgId = bgId
-        }
-    }
+        applyOsdBoxOptions(bgId, isInit = false)
 
-    /**
-     * ریلود کردن واقعی تِرک فعال برای اعمال آنی استایل کادر جدید
-     */
-    private fun reloadSubtitleTrack() {
-        try {
-            val sid = MPVLib.getPropertyInt("sid") ?: -1
-            if (sid > 0) {
-                MPVLib.setPropertyInt("sid", -1)
-                MPVLib.setPropertyInt("sid", sid)
-            }
-        } catch (e: Exception) {
-            // نادیده بگیر
-        }
+        SubtitleNormalizer.updateStyleConfig(
+            size = size,
+            pos = pos,
+            border = border,
+            bold = bold,
+            colorHex = color,
+            bgId = bgId,
+            assOverride = assOverride,
+            refreshNow = true
+        )
     }
 
     fun showStyleDialog(context: Context, onDismiss: () -> Unit) {
@@ -160,6 +148,9 @@ object SubtitleStyleManager {
         var currentColor = prefs.getString(PREF_SUB_COLOR, DEFAULT_COLOR) ?: DEFAULT_COLOR
         var currentBgId = prefs.getString(PREF_SUB_BG_COLOR, DEFAULT_BG_COLOR) ?: DEFAULT_BG_COLOR
         var currentAssOverride = prefs.getBoolean(PREF_SUB_ASS_OVERRIDE, DEFAULT_ASS_OVERRIDE)
+
+        // فعال کردن حالت پیش‌نمایش زنده (تا اگر در لحظهٔ باز بودن دیالوگ زیرنویسی نبود، متن نمونه نمایش داده شود)
+        SubtitleNormalizer.setPreviewMode(true)
 
         fun updateLabels() {
             txtSubSize.text = context.getString(R.string.subtitle_size_label, currentSize)
@@ -311,6 +302,7 @@ object SubtitleStyleManager {
             }
             .setOnDismissListener {
                 flushApply()
+                SubtitleNormalizer.setPreviewMode(false)
                 onDismiss()
             }
             .create()
