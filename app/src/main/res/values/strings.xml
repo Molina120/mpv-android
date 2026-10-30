@@ -275,4 +275,11 @@
     <!-- Video badges -->
     <string name="badge_sub">SRT</string>
     <string name="badge_dub">DUB</string>
+    <string name="badge_new">New</string>
+
+    <!-- Resume playback (MX style) -->
+    <string name="resume_title">Resume playback?</string>
+    <string name="resume_message">Continue from %1$s?</string>
+    <string name="resume_continue">Continue</string>
+    <string name="resume_from_start">From start</string>
 </resources>

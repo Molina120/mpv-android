@@ -173,6 +173,10 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
 
     private var shouldSavePosition = false
 
+    // ردیاب وضعیت تماشا (ادامه پخش / دیده‌شده / آخرین ویدیو)
+    private var intentVideoId: Long? = null
+    private var pendingResumeMs: Long = 0L
+
     private var autoRotationMode = ""
 
     private var controlsAtBottom = true
@@ -295,6 +299,9 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         if (intent.action == Intent.ACTION_VIEW) {
             parseIntentExtras(intent.extras)
         }
+        // ردیابی وضعیت تماشا + موقعیت ادامه پخش
+        intentVideoId = WatchTracker.videoIdFromIntent(intent)
+        pendingResumeMs = intent.getLongExtra("resume_position_ms", 0L)
 
         if (filepath == null) {
             Log.e(TAG, "No file given, exiting")
@@ -491,6 +498,7 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             updateMediaSession()
         }
         writeSettings()
+        saveWatchState()
         super.onPause()
 
         didResumeBackgroundPlayback = shouldBackground
@@ -2157,6 +2165,39 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         }
     }
 
+    /**
+     * ادامه پخش از موقعیت ذخیره‌شده (یک‌بار، بعد از لود فایل).
+     * روی ترد event اجرا می‌شود.
+     */
+    private fun applyPendingResume() {
+        val ms = pendingResumeMs
+        pendingResumeMs = 0L
+        if (ms > 10_000) {
+            try {
+                player.timePos = ms / 1000.0
+                Log.d(TAG, "Resumed at ${ms}ms")
+            } catch (e: Exception) {
+                Log.w(TAG, "resume seek failed", e)
+            }
+        }
+    }
+
+    /**
+     * ذخیره وضعیت تماشا هنگام توقف/خروج از پخش (برای «ادامه پخش» در مرورگر).
+     */
+    private fun saveWatchState() {
+        val vid = intentVideoId ?: return
+        try {
+            val posMs = ((player.timePos ?: 0.0) * 1000).toLong().coerceAtLeast(0L)
+            val durMs = psc.duration.coerceAtLeast(0L)
+            val eof = MPVLib.getPropertyBoolean("eof-reached") == true
+            if (posMs > 0 || eof)
+                WatchTracker.onPlaybackStopped(applicationContext, vid, posMs, durMs, eof)
+        } catch (e: Exception) {
+            Log.w(TAG, "saveWatchState failed", e)
+        }
+    }
+
     override fun event(eventId: Int) {
         if (eventId == MpvEvent.MPV_EVENT_END_FILE) {
             psc.eof()
@@ -2170,6 +2211,7 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         if (eventId == MpvEvent.MPV_EVENT_FILE_LOADED) {
             autoNormalizeSubtitles()
             autoLoadExternalTracks()
+            applyPendingResume()
         }
 
         if (eventId == MpvEvent.MPV_EVENT_START_FILE) {

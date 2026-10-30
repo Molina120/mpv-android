@@ -70,6 +70,20 @@
                 android:visibility="gone" />
 
             <TextView
+                android:id="@+id/badgeNew"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="6dp"
+                android:background="@drawable/badge_amber"
+                android:paddingHorizontal="8dp"
+                android:paddingVertical="3dp"
+                android:text="@string/badge_new"
+                android:textColor="#ffffff"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:visibility="gone" />
+
+            <TextView
                 android:id="@+id/badgeDub"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"

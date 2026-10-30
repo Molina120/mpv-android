@@ -46,6 +46,10 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
     private val scanner = Executors.newSingleThreadExecutor()
     private val thumbExecutor = Executors.newFixedThreadPool(2)
 
+    /** وضعیت تماشا (به سبک MX Player) */
+    private var newVideoIds: Set<Long> = emptySet()
+    private var lastPlayedId: Long? = null
+
     /** کش بندانگشتی‌ها: حداکثر ~8 مگابایت */
     private val thumbCache = object : LruCache<Long, Bitmap>(8 * 1024) {
         override fun sizeOf(key: Long, value: Bitmap): Int = value.byteCount / 1024
@@ -212,6 +216,30 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         if (hasPermission() && !loadedOnce &&
             binding.permissionView.isVisible) {
             loadVideos()
+        } else if (loadedOnce) {
+            // برگشت از پخش: وضعیت تماشا (ادامه/دیده‌شده/آخرین) را تازه کن
+            refreshWatchStates()
+        }
+    }
+
+    /** تازه‌سازی وضعیت تماشا بدون اسکن مجدد */
+    private fun refreshWatchStates() {
+        if (!isAdded) return
+        val ctx = requireContext()
+        lastPlayedId = WatchTracker.lastPlayedId(ctx)
+        updateFab()
+        (binding.videoList.adapter as? BrowserAdapter)?.notifyDataSetChanged()
+    }
+
+    /** دکمه شناور «آخرین ویدیو» به سبک MX Player */
+    private fun updateFab() {
+        val id = lastPlayedId
+        val target = folders.asSequence().flatMap { it.videos }.find { it.id == id }
+        if (target != null) {
+            binding.lastVideoFab.isVisible = true
+            binding.lastVideoFab.setOnClickListener { onVideoTap(target) }
+        } else {
+            binding.lastVideoFab.isVisible = false
         }
     }
 
@@ -256,11 +284,20 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             private val name: TextView = v.findViewById(R.id.folderName)
             private val count: TextView = v.findViewById(R.id.folderCount)
             private val size: TextView = v.findViewById(R.id.folderSize)
+            private val badgeNew: TextView = v.findViewById(R.id.folderBadgeNew)
             fun bind(folder: VideoScanner.Folder) {
                 name.text = folder.name
                 count.text = resources.getQuantityString(
                     R.plurals.browser_videos_count, folder.videos.size, folder.videos.size)
                 size.text = VideoScanner.formatSize(itemView.context, folder.totalSize)
+                // آخرین پوشه پخش‌شده آبی می‌شود (مثل MX Player)
+                val isLast = lastPlayedId != null &&
+                        folder.videos.any { it.id == lastPlayedId }
+                name.setTextColor(
+                    ContextCompat.getColor(itemView.context,
+                        if (isLast) R.color.watch_last else android.R.color.white))
+                // بج New اگر ویدیوی جدید دارد
+                badgeNew.isVisible = folder.videos.any { it.id in newVideoIds }
                 itemView.setOnClickListener { showVideos(folder) }
             }
         }
@@ -271,6 +308,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             private val name: TextView = v.findViewById(R.id.videoName)
             private val badgeSub: TextView = v.findViewById(R.id.badgeSub)
             private val badgeDub: TextView = v.findViewById(R.id.badgeDub)
+            private val badgeNew: TextView = v.findViewById(R.id.badgeNew)
             private val badgeSize: TextView = v.findViewById(R.id.badgeSize)
             private val badgeDate: TextView = v.findViewById(R.id.badgeDate)
             fun bind(video: VideoScanner.Video) {
@@ -278,12 +316,22 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                 thumbDuration.text = VideoScanner.formatDuration(video.durationMs)
                 badgeSub.isVisible = video.hasSubtitle
                 badgeDub.isVisible = video.hasDubbedAudio
+                badgeNew.isVisible = video.id in newVideoIds
                 badgeSize.text = VideoScanner.formatSize(itemView.context, video.sizeBytes)
                 val dateStr = VideoScanner.formatDate(video.dateModifiedSec)
                 badgeDate.isVisible = dateStr.isNotEmpty()
                 badgeDate.text = dateStr
+                // وضعیت تماشا: دیده‌شده خاکستری، آخرین ویدیو آبی (مثل MX Player)
+                val ctx = itemView.context
+                val watched = WatchTracker.state(ctx, video.id)?.watched == true
+                name.setTextColor(
+                    ContextCompat.getColor(ctx, when {
+                        watched -> R.color.watch_done
+                        video.id == lastPlayedId -> R.color.watch_last
+                        else -> android.R.color.white
+                    }))
                 loadThumb(video, thumb)
-                itemView.setOnClickListener { playFile(video.uri.toString()) }
+                itemView.setOnClickListener { onVideoTap(video) }
             }
         }
     }
@@ -336,6 +384,12 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                 if (!isAdded) return@runOnUiThread
                 folders = result
                 loadedOnce = true
+                // وضعیت تماشا: ویدیوهای جدید + آخرین ویدیو
+                val ctx = requireContext()
+                newVideoIds = WatchTracker.updateKnownIds(
+                    ctx, result.asSequence().flatMap { it.videos }.map { it.id }.toSet())
+                lastPlayedId = WatchTracker.lastPlayedId(ctx)
+                updateFab()
                 binding.loading.isVisible = false
                 if (openFolder != null) {
                     // اگر پوشه‌ای باز است، همان را تازه کن
@@ -454,7 +508,34 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         }
     }
 
-    private fun playFile(filepath: String) {
+    /** تپ روی ویدیو: اگر قبلاً پخش شده، «ادامه» یا «از اول» می‌پرسد */
+    private fun onVideoTap(video: VideoScanner.Video) {
+        val ctx = requireContext()
+        val st = WatchTracker.state(ctx, video.id)
+        val canResume = st != null && !st.watched && st.positionMs > 10_000 &&
+                (st.durationMs <= 0 || st.positionMs < st.durationMs * 0.95)
+        if (canResume) {
+            AlertDialog.Builder(ctx)
+                .setTitle(R.string.resume_title)
+                .setMessage(getString(
+                    R.string.resume_message,
+                    VideoScanner.formatDuration(st!!.positionMs)))
+                .setPositiveButton(R.string.resume_continue) { d, _ ->
+                    playFile(video.uri.toString(), st.positionMs)
+                    d.dismiss()
+                }
+                .setNegativeButton(R.string.resume_from_start) { d, _ ->
+                    WatchTracker.clearPosition(ctx, video.id)
+                    playFile(video.uri.toString(), 0L)
+                    d.dismiss()
+                }
+                .show()
+        } else {
+            playFile(video.uri.toString(), 0L)
+        }
+    }
+
+    private fun playFile(filepath: String, resumeMs: Long = 0L) {
         val i: Intent
         if (filepath.startsWith("content://")) {
             i = Intent(Intent.ACTION_VIEW, Uri.parse(filepath))
@@ -464,6 +545,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             i.putExtra("filepath", filepath)
         }
         i.setClass(requireContext(), MPVActivity::class.java)
+        if (resumeMs > 0) i.putExtra("resume_position_ms", resumeMs)
         playerLauncher.launch(i)
     }
 

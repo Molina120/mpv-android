@@ -253,4 +253,11 @@
     <!-- Video badges -->
     <string name="badge_sub">SRT</string>
     <string name="badge_dub">DUB</string>
+    <string name="badge_new">جدید</string>
+
+    <!-- Resume playback (MX style) -->
+    <string name="resume_title">ادامه پخش؟</string>
+    <string name="resume_message">از %1$s ادامه بده؟</string>
+    <string name="resume_continue">ادامه</string>
+    <string name="resume_from_start">از اول</string>
 </resources>

@@ -76,5 +76,26 @@
                 android:layout_marginTop="16dp"
                 android:text="@string/browser_grant_access" />
         </LinearLayout>
+
+        <!-- دکمه شناور «آخرین ویدیو» به سبک MX Player -->
+        <FrameLayout
+            android:id="@+id/lastVideoFab"
+            android:layout_width="64dp"
+            android:layout_height="64dp"
+            android:layout_gravity="bottom|end"
+            android:layout_margin="20dp"
+            android:background="@drawable/fab_circle"
+            android:clickable="true"
+            android:focusable="true"
+            android:foreground="?attr/selectableItemBackgroundBorderless"
+            android:visibility="gone">
+
+            <ImageView
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_play_arrow_black_24dp"
+                android:tint="#722b72" />
+        </FrameLayout>
     </FrameLayout>
 </LinearLayout>

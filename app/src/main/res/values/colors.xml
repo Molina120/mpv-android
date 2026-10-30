@@ -20,4 +20,8 @@
     <color name="nnf_light_separator_color">#1e000000</color>
     <!-- 12% white in BLACK THEME -->
     <color name="nnf_dark_separator_color">#1effffff</color>
+
+    <!-- وضعیت تماشا در مرورگر (به سبک MX Player) -->
+    <color name="watch_last">#7ab8ff</color>
+    <color name="watch_done">#757575</color>
 </resources>
