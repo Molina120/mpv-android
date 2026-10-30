@@ -2088,10 +2088,9 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
                 isSoftsubExtracted = true
 
                 Thread {
-                    val extractedFile = MatroskaSubExtractor.extractAndNormalize(applicationContext, currentPath)
+                    val extractedFile = EmbeddedSubExtractor.extractAndNormalize(applicationContext, currentPath)
                     if (extractedFile != null && extractedFile.exists()) {
                         runOnUiThread {
-                            // اضافه کردن زیرنویس اصلاح شده و انتخاب خودکار آن
                             MPVLib.command(arrayOf("sub-add", extractedFile.absolutePath, "select"))
                         }
                     }
