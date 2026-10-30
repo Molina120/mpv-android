@@ -35,6 +35,7 @@ object VideoScanner {
             MediaStore.Video.Media.DISPLAY_NAME,
             MediaStore.Video.Media.DURATION,
             MediaStore.Video.Media.SIZE,
+            MediaStore.Video.Media.DATE_MODIFIED,
             MediaStore.Video.Media.BUCKET_DISPLAY_NAME
         )
         val sortOrder = "${MediaStore.Video.Media.DISPLAY_NAME} ASC"
