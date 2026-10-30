@@ -249,4 +249,8 @@
     <string name="sort_size">حجم</string>
     <string name="sort_order_newest_first">↓ جدیدترین اول</string>
     <string name="sort_order_oldest_first">↑ قدیمی‌ترین اول</string>
+
+    <!-- Video badges -->
+    <string name="badge_sub">SRT</string>
+    <string name="badge_dub">DUB</string>
 </resources>

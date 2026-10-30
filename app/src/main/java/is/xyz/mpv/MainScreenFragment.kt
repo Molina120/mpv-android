@@ -7,13 +7,18 @@ import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.MediaStore
 import android.util.Log
+import android.util.LruCache
+import android.util.Size
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ImageView
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.ActivityResultLauncher
@@ -39,6 +44,12 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
     private lateinit var permissionLauncher: ActivityResultLauncher<String>
 
     private val scanner = Executors.newSingleThreadExecutor()
+    private val thumbExecutor = Executors.newFixedThreadPool(2)
+
+    /** کش بندانگشتی‌ها: حداکثر ~8 مگابایت */
+    private val thumbCache = object : LruCache<Long, Bitmap>(8 * 1024) {
+        override fun sizeOf(key: Long, value: Bitmap): Int = value.byteCount / 1024
+    }
 
     private var folders: List<VideoScanner.Folder> = emptyList()
     private var openFolder: VideoScanner.Folder? = null
@@ -255,13 +266,61 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         }
 
         inner class VideoVH(v: View) : RecyclerView.ViewHolder(v) {
+            private val thumb: ImageView = v.findViewById(R.id.videoThumb)
+            private val thumbDuration: TextView = v.findViewById(R.id.thumbDuration)
             private val name: TextView = v.findViewById(R.id.videoName)
-            private val meta: TextView = v.findViewById(R.id.videoMeta)
+            private val badgeSub: TextView = v.findViewById(R.id.badgeSub)
+            private val badgeDub: TextView = v.findViewById(R.id.badgeDub)
+            private val badgeSize: TextView = v.findViewById(R.id.badgeSize)
+            private val badgeDate: TextView = v.findViewById(R.id.badgeDate)
             fun bind(video: VideoScanner.Video) {
                 name.text = video.name
-                meta.text = "${VideoScanner.formatDuration(video.durationMs)} • " +
-                        VideoScanner.formatSize(itemView.context, video.sizeBytes)
+                thumbDuration.text = VideoScanner.formatDuration(video.durationMs)
+                badgeSub.isVisible = video.hasSubtitle
+                badgeDub.isVisible = video.hasDubbedAudio
+                badgeSize.text = VideoScanner.formatSize(itemView.context, video.sizeBytes)
+                val dateStr = VideoScanner.formatDate(video.dateModifiedSec)
+                badgeDate.isVisible = dateStr.isNotEmpty()
+                badgeDate.text = dateStr
+                loadThumb(video, thumb)
                 itemView.setOnClickListener { playFile(video.uri.toString()) }
+            }
+        }
+    }
+
+    /** لود تنبل بندانگشتی با کش؛ فقط اگر ردیف هنوز همان ویدیو را نشان می‌دهد ست می‌شود */
+    private fun loadThumb(video: VideoScanner.Video, imageView: ImageView) {
+        imageView.tag = video.id
+        thumbCache.get(video.id)?.let {
+            imageView.background = null
+            imageView.setImageBitmap(it)
+            return
+        }
+        imageView.setImageDrawable(null)
+        imageView.setBackgroundColor(0xFF2C2F34.toInt())
+        val appCtx = requireContext().applicationContext
+        thumbExecutor.execute {
+            try {
+                val bmp: Bitmap? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    appCtx.contentResolver.loadThumbnail(video.uri, Size(192, 144), null)
+                } else {
+                    @Suppress("DEPRECATION")
+                    MediaStore.Video.Thumbnails.getThumbnail(
+                        appCtx.contentResolver, video.id,
+                        MediaStore.Video.Thumbnails.MINI_KIND, null
+                    )
+                }
+                if (bmp != null) {
+                    thumbCache.put(video.id, bmp)
+                    imageView.post {
+                        if (imageView.tag == video.id) {
+                            imageView.background = null
+                            imageView.setImageBitmap(bmp)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "thumbnail failed: ${video.name}")
             }
         }
     }
@@ -410,6 +469,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
 
     override fun onDestroy() {
         scanner.shutdown()
+        thumbExecutor.shutdown()
         super.onDestroy()
     }
 
