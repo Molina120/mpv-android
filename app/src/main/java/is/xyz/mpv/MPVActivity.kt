@@ -304,6 +304,25 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
 
         player.addObserver(this)
         player.initialize(filesDir.path, cacheDir.path)
+
+        // بررسی و نرمالایز خودکار زیرنویس‌های کنار فایل ویدیو
+        try {
+            val videoFile = java.io.File(filepath)
+            if (videoFile.exists() && videoFile.parentFile != null) {
+                val base = videoFile.nameWithoutExtension
+                val srtFile = videoFile.parentFile!!.listFiles()?.firstOrNull { f ->
+                    f.isFile && f.extension.equals("srt", ignoreCase = true) &&
+                    (f.nameWithoutExtension == base || f.nameWithoutExtension.startsWith(base))
+                }
+                if (srtFile != null) {
+                    val normPath = SubtitleNormalizer.processSubtitlePath(applicationContext, srtFile.absolutePath)
+                    onloadCommands.add(arrayOf("sub-add", normPath, "select"))
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Auto subtitle check failed", e)
+        }
+
         player.playFile(filepath)
 
         mediaSession = initMediaSession()
@@ -1163,8 +1182,9 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
                 val subfile = resolveUri(suburi) ?: continue
                 val flag = if (subsToEnable.any { it == suburi }) "select" else "auto"
 
-                Log.v(TAG, "Adding subtitles from intent extras: $subfile")
-                onloadCommands.add(arrayOf("sub-add", subfile, flag))
+                val finalSubFile = SubtitleNormalizer.processSubtitlePath(applicationContext, subfile)
+                Log.v(TAG, "Adding normalized subtitles from intent extras: $finalSubFile")
+                onloadCommands.add(arrayOf("sub-add", finalSubFile, flag))
             }
         }
         extras.getInt("position", 0).let {
@@ -1394,25 +1414,15 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
                 translateContentUri(Uri.parse(path))
             else
                 path
-            MPVLib.command(arrayOf(cmd, path2, "cached"))
-        }
 
-        /**
-         * لود زیرنویس خارجی با نرمالایز کردن علائم نگارشی فارسی (برای فایل‌های SRT).
-         * اگر فایل SRT باشد، نسخه نرمالایزشده در کش ذخیره و لود می‌شود؛
-         * در غیر این صورت فایل اصلی لود می‌شود.
-         */
-        fun addExternalSubtitle(result: Int, data: Intent?) {
-            if (result != RESULT_OK)
-                return
-            val path = data!!.getStringExtra("path")!!
-            val path2 = if (path.startsWith("content://"))
-                translateContentUri(Uri.parse(path))
-            else
-                path
+            // نرمالایز کردن زیرنویس قبل از لود شدن
+            val finalPath = if (cmd == "sub-add") {
+                SubtitleNormalizer.processSubtitlePath(applicationContext, path2)
+            } else {
+                path2
+            }
 
-            val finalPath = normalizeSrtFileIfNeeded(path2)
-            MPVLib.command(arrayOf("sub-add", finalPath, "cached"))
+            MPVLib.command(arrayOf(cmd, finalPath, "cached"))
         }
 
         /******/
@@ -1426,7 +1436,7 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
                 },
                 MenuItem(R.id.subBtn) {
                     openFilePickerFor(RCODE_EXTERNAL_SUB, R.string.open_external_sub) { result, data ->
-                        addExternalSubtitle(result, data)
+                        addExternalThing("sub-add", result, data)
                         restoreState()
                     }; false
                 },
@@ -1918,148 +1928,15 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
 
     // mpv events
 
-    /** مسیر فایل‌های زیرنویس خارجی که قبلاً نرمالایز شدن (جلوگیری از حلقه) */
-    private val normalizedSubFiles = mutableSetOf<String>()
-
-    /**
-     * اگر فایل SRT باشد، علائم نگارشی را نرمالایز کرده و مسیر فایل موقت را برمی‌گرداند.
-     * انکدینگ را خودکار تشخیص می‌دهد (UTF-8 یا Windows-1256).
-     */
-    fun normalizeSrtFileIfNeeded(path: String): String {
-        return try {
-            if (!path.endsWith(".srt", ignoreCase = true)) return path
-            val original = java.io.File(path)
-            if (!original.exists() || !original.canRead()) return path
-
-            val bytes = original.readBytes()
-            if (bytes.isEmpty()) return path
-
-            // تشخیص انکدینگ: اول UTF-8، اگر کاراکتر RTL نداشت Windows-1256
-            val content = detectSrtEncoding(bytes) ?: return path
-            val normalized = SubtitleNormalizer.normalizeSrt(content)
-
-            if (normalized != content) {
-                val tmpDir = java.io.File(cacheDir, "normalized_subs")
-                tmpDir.mkdirs()
-                val tmpName = "norm_${path.hashCode().toString(16)}.srt"
-                val tmpFile = java.io.File(tmpDir, tmpName)
-                // همیشه با UTF-8 (با BOM) ذخیره کن تا mpv درست بخواند
-                tmpFile.writeBytes(byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte()) + normalized.toByteArray(Charsets.UTF_8))
-                tmpFile.absolutePath
-            } else {
-                path
-            }
-        } catch (e: Exception) {
-            path
-        }
-    }
-
-    /**
-     * تشخیص انکدینگ فایل SRT: UTF-8 یا Windows-1256.
-     * هر کدام که کاراکتر راست‌به‌چپ داشت، همان است.
-     */
-    private fun detectSrtEncoding(bytes: ByteArray): String? {
-        // اول UTF-8 را امتحان کن (BOM را نادیده بگیر)
-        try {
-            var utf8 = String(bytes, Charsets.UTF_8)
-            if (utf8.startsWith("\uFEFF")) utf8 = utf8.substring(1)
-            if (utf8.containsRtl()) return utf8
-        } catch (e: Exception) { }
-
-        // بعد Windows-1256
-        try {
-            val win = String(bytes, charset("windows-1256"))
-            if (win.containsRtl()) return win
-        } catch (e: Exception) { }
-
-        // اگر هیچ‌کدام RTL نداشت، همان UTF-8 را برگردان (شاید زیرنویس انگلیسی است)
-        return try {
-            String(bytes, Charsets.UTF_8)
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    /** بررسی وجود حداقل یک کاراکتر راست‌به‌چپ */
-    private fun String.containsRtl(): Boolean {
-        for (c in this) {
-            val dir = Character.getDirectionality(c)
-            if (dir == Character.DIRECTIONALITY_RIGHT_TO_LEFT ||
-                dir == Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC) {
-                return true
-            }
-        }
-        return false
-    }
-
     private fun eventPropertyUi(property: String, dummy: Any?, metaUpdated: Boolean) {
         if (!activityIsForeground) return
         when (property) {
-            "track-list" -> {
-                player.loadTracks()
-                // بررسی زیرنویس‌های خارجی خودکارلودشده برای نرمالایز
-                normalizeAutoLoadedSubs()
-            }
+            "track-list" -> player.loadTracks()
             "current-tracks/audio/selected", "current-tracks/video/image" -> updateAudioUI()
             "hwdec-current" -> updateDecoderButton()
         }
         if (metaUpdated)
             updateMetadataDisplay()
-    }
-
-    /**
-     * بررسی ترک‌های زیرنویس خارجی (خودکار لودشده یا دستی) و جایگزینی با نسخه نرمالایزشده.
-     * فقط برای فایل‌های SRT که هنوز نرمالایز نشدن.
-     */
-    private fun normalizeAutoLoadedSubs() {
-        try {
-            val count = MPVLib.getPropertyInt("track-list/count") ?: return
-            for (i in 0 until count) {
-                val type = MPVLib.getPropertyString("track-list/$i/type") ?: continue
-                if (type != "sub") continue
-
-                // فقط زیرنویس‌های خارجی (embedded ها external-filename ندارن)
-                val extFile = MPVLib.getPropertyString("track-list/$i/external-filename") ?: continue
-                if (!extFile.endsWith(".srt", ignoreCase = true)) continue
-                if (normalizedSubFiles.contains(extFile)) continue
-
-                val mpvId = MPVLib.getPropertyInt("track-list/$i/id") ?: continue
-                val isSelected = MPVLib.getPropertyBoolean("track-list/$i/selected") ?: false
-
-                // نرمالایز کن
-                val normalizedPath = normalizeSrtFileIfNeeded(extFile)
-                if (normalizedPath != extFile) {
-                    // فایل نرمالایزشده را اضافه کن
-                    MPVLib.command(arrayOf("sub-add", normalizedPath, "cached"))
-                    // ترک اصلی را حذف کن تا تکراری نشود
-                    // (با کمی تأخیر تا sub-add کامل شود)
-                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                        try {
-                            // پیدا کردن ID ترک جدید و انتخاب آن
-                            val newCount = MPVLib.getPropertyInt("track-list/count") ?: return@postDelayed
-                            for (j in 0 until newCount) {
-                                val t = MPVLib.getPropertyString("track-list/$j/type") ?: continue
-                                if (t != "sub") continue
-                                val ef = MPVLib.getPropertyString("track-list/$j/external-filename") ?: continue
-                                if (ef == normalizedPath) {
-                                    val newId = MPVLib.getPropertyInt("track-list/$j/id") ?: continue
-                                    MPVLib.setPropertyInt("sid", newId)
-                                    break
-                                }
-                            }
-                            // حذف ترک اصلی قدیمی
-                            MPVLib.command(arrayOf("sub-remove", mpvId.toString()))
-                        } catch (e: Exception) { }
-                    }, 500)
-                    normalizedSubFiles.add(extFile)
-                } else {
-                    // تغییری نکرد، علامت بزن تا دوباره بررسی نشود
-                    normalizedSubFiles.add(extFile)
-                }
-            }
-        } catch (e: Exception) {
-            // نادیده بگیر
-        }
     }
 
     private fun eventPropertyUi(property: String, value: Boolean) {

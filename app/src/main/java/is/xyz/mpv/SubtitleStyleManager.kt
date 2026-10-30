@@ -19,15 +19,14 @@ object SubtitleStyleManager {
     private const val PREF_SUB_BG_COLOR = "custom_sub_bg_color"
     private const val PREF_SUB_ASS_OVERRIDE = "custom_sub_ass_override"
 
-    private const val DEFAULT_SIZE = 55 // بازه 20 تا 100
-    private const val DEFAULT_POS = 100 // بازه 0 تا 100 (0=بالا، 100=پایین)
-    private const val DEFAULT_BORDER = 3.0 // بازه 0.0 تا 6.0
+    private const val DEFAULT_SIZE = 55
+    private const val DEFAULT_POS = 100
+    private const val DEFAULT_BORDER = 3.0
     private const val DEFAULT_BOLD = false
     private const val DEFAULT_COLOR = "#FFFFFF"
-    private const val DEFAULT_BG_COLOR = "#00000000"
+    private const val DEFAULT_BG_COLOR = "transparent"
     private const val DEFAULT_ASS_OVERRIDE = true
 
-    // حداقل تأخیر بین دو اعمال متوالی روی mpv (جلوگیری از قفل شدن UI هنگام درگ)
     private const val APPLY_DEBOUNCE_MS = 250L
 
     data class ColorOption(val nameRes: Int, val hex: String)
@@ -42,16 +41,16 @@ object SubtitleStyleManager {
         ColorOption(R.string.color_pink, "#FF69B4")
     )
 
-    private val bgColors = listOf(
-        ColorOption(R.string.bg_transparent, "#00000000"),
-        ColorOption(R.string.bg_semi_50, "#80000000"),
-        ColorOption(R.string.bg_dark_75, "#BF000000"),
-        ColorOption(R.string.bg_solid_100, "#FF000000")
+    data class BgOption(val nameRes: Int, val id: String, val assStyle: String)
+
+    // تنظیم دقیق کادر و رنگ بر اساس سینتکس ASS
+    private val bgOptions = listOf(
+        BgOption(R.string.bg_transparent, "transparent", "BorderStyle=1"),
+        BgOption(R.string.bg_semi_50, "semi_50", "BorderStyle=3,BackColour=&H80000000,OutlineColour=&H80000000,Outline=4"),
+        BgOption(R.string.bg_dark_75, "dark_75", "BorderStyle=3,BackColour=&H40000000,OutlineColour=&H40000000,Outline=4"),
+        BgOption(R.string.bg_solid_100, "solid_100", "BorderStyle=3,BackColour=&H00000000,OutlineColour=&H00000000,Outline=4")
     )
 
-    /**
-     * فراخوانی در MPVView.initOptions() قبل از MPVLib.init()
-     */
     fun applyInitialOptions(context: Context) {
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
         val size = prefs.getInt(PREF_SUB_SIZE, DEFAULT_SIZE).coerceIn(20, 100)
@@ -59,7 +58,7 @@ object SubtitleStyleManager {
         val border = prefs.getFloat(PREF_SUB_BORDER, DEFAULT_BORDER.toFloat()).toDouble().coerceIn(0.0, 6.0)
         val bold = prefs.getBoolean(PREF_SUB_BOLD, DEFAULT_BOLD)
         val color = prefs.getString(PREF_SUB_COLOR, DEFAULT_COLOR) ?: DEFAULT_COLOR
-        val bgColor = prefs.getString(PREF_SUB_BG_COLOR, DEFAULT_BG_COLOR) ?: DEFAULT_BG_COLOR
+        val bgId = prefs.getString(PREF_SUB_BG_COLOR, DEFAULT_BG_COLOR) ?: DEFAULT_BG_COLOR
         val assOverride = prefs.getBoolean(PREF_SUB_ASS_OVERRIDE, DEFAULT_ASS_OVERRIDE)
 
         MPVLib.setOptionString("sub-font", FontInstaller.FONT_FAMILY)
@@ -68,30 +67,18 @@ object SubtitleStyleManager {
         MPVLib.setOptionString("sub-border-size", border.toString())
         MPVLib.setOptionString("sub-bold", if (bold) "yes" else "no")
         MPVLib.setOptionString("sub-color", color)
-        MPVLib.setOptionString("sub-back-color", bgColor)
         MPVLib.setOptionString("sub-ass-override", if (assOverride) "force" else "yes")
-        // باکس پس‌زمینه: اگر رنگ غیرشفاف است، BorderStyle=3 لازم است
-        try {
-            val style = if (bgColor.equals("#00000000", ignoreCase = true)) "" else "BorderStyle=3"
-            MPVLib.setOptionString("sub-ass-style-overrides", style)
-            try {
-                MPVLib.setOptionString("ass-style-overrides", style)
-            } catch (e: Exception) { }
-        } catch (e: Exception) {
-            // نادیده بگیر
-        }
+
+        val bgOpt = bgOptions.firstOrNull { it.id == bgId } ?: bgOptions[0]
+        MPVLib.setOptionString("sub-ass-style-overrides", bgOpt.assStyle)
     }
 
-    /**
-     * اعمال آنی تغییرات در حین پخش ویدیو — فقط پراپرتی‌هایی که واقعاً عوض شدن
-     * (ست کردن بی‌جهت sub-ass-override باعث ریلود زیرنویس و قفل شدن UI می‌شد)
-     */
     private var lastSize: Int? = null
     private var lastPos: Int? = null
     private var lastBorder: Double? = null
     private var lastBold: Boolean? = null
     private var lastColor: String? = null
-    private var lastBgColor: String? = null
+    private var lastBgId: String? = null
     private var lastAssOverride: Boolean? = null
 
     private fun applyLiveProperties(
@@ -100,7 +87,7 @@ object SubtitleStyleManager {
         border: Double,
         bold: Boolean,
         color: String,
-        bgColor: String,
+        bgId: String,
         assOverride: Boolean,
         forceAll: Boolean = false
     ) {
@@ -124,58 +111,31 @@ object SubtitleStyleManager {
             MPVLib.setPropertyString("sub-color", color)
             lastColor = color
         }
-        if (forceAll || lastBgColor != bgColor) {
-            MPVLib.setPropertyString("sub-back-color", bgColor)
-            applyBackgroundBoxStyle(bgColor)
-            lastBgColor = bgColor
-        }
         if (forceAll || lastAssOverride != assOverride) {
             MPVLib.setPropertyString("sub-ass-override", if (assOverride) "force" else "yes")
             lastAssOverride = assOverride
         }
-        // sub-font ثابت است؛ فقط در applyInitialOptions ست می‌شود
-    }
-
-    /**
-     * برای اینکه کادر پس‌زمینه واقعاً به‌صورت باکس دیده شود، libass باید
-     * BorderStyle=3 (opaque box) داشته باشد؛ در غیر این صورت فقط سایه رنگ می‌گیرد.
-     * بعد از تغییر، زیرنویس را ریلود می‌کنیم تا استایل جدید اعمال شود.
-     */
-    private fun applyBackgroundBoxStyle(bgColor: String) {
-        try {
-            val style = if (bgColor.equals("#00000000", ignoreCase = true)) "" else "BorderStyle=3"
-            // نام جدید (mpv جدید)
-            MPVLib.setPropertyString("sub-ass-style-overrides", style)
-            // نام قدیمی (سازگاری با نسخه‌های قدیمی‌تر)
-            try {
-                MPVLib.setPropertyString("ass-style-overrides", style)
-            } catch (e: Exception) { }
-            // فورس ریلود زیرنویس تا استایل جدید اعمال شود
-            forceSubtitleReload()
-        } catch (e: Exception) {
-            // اگر این پراپرتی در این نسخه پشتیبانی نشود، نادیده بگیر
+        if (forceAll || lastBgId != bgId) {
+            val bgOpt = bgOptions.firstOrNull { it.id == bgId } ?: bgOptions[0]
+            MPVLib.setPropertyString("sub-ass-style-overrides", bgOpt.assStyle)
+            reloadSubtitleTrack()
+            lastBgId = bgId
         }
     }
 
-    /** ریلود زیرنویس با خاموش/روشن کردن موقت visibility */
-    private fun forceSubtitleReload() {
+    /**
+     * ریلود کردن واقعی تِرک فعال برای اعمال آنی استایل کادر جدید
+     */
+    private fun reloadSubtitleTrack() {
         try {
-            val currentSid = MPVLib.getPropertyInt("sid")
-            // روش ۱: toggle visibility
-            MPVLib.setPropertyString("sub-visibility", "no")
-            MPVLib.setPropertyString("sub-visibility", "yes")
-        } catch (e: Exception) { }
-    }
-
-    /** کش را ریست کن تا اعمال بعدی همه‌چیز را ست کند (مثلاً هنگام باز شدن دیالوگ) */
-    private fun resetCache() {
-        lastSize = null
-        lastPos = null
-        lastBorder = null
-        lastBold = null
-        lastColor = null
-        lastBgColor = null
-        lastAssOverride = null
+            val sid = MPVLib.getPropertyInt("sid") ?: -1
+            if (sid > 0) {
+                MPVLib.setPropertyInt("sid", -1)
+                MPVLib.setPropertyInt("sid", sid)
+            }
+        } catch (e: Exception) {
+            // نادیده بگیر
+        }
     }
 
     fun showStyleDialog(context: Context, onDismiss: () -> Unit) {
@@ -198,24 +158,19 @@ object SubtitleStyleManager {
         var currentBorder = prefs.getFloat(PREF_SUB_BORDER, DEFAULT_BORDER.toFloat()).toDouble().coerceIn(0.0, 6.0)
         var currentBold = prefs.getBoolean(PREF_SUB_BOLD, DEFAULT_BOLD)
         var currentColor = prefs.getString(PREF_SUB_COLOR, DEFAULT_COLOR) ?: DEFAULT_COLOR
-        var currentBgColor = prefs.getString(PREF_SUB_BG_COLOR, DEFAULT_BG_COLOR) ?: DEFAULT_BG_COLOR
+        var currentBgId = prefs.getString(PREF_SUB_BG_COLOR, DEFAULT_BG_COLOR) ?: DEFAULT_BG_COLOR
         var currentAssOverride = prefs.getBoolean(PREF_SUB_ASS_OVERRIDE, DEFAULT_ASS_OVERRIDE)
 
-        // کش را ریست کن تا اعمال اولیه همه‌چیز را ست کند
-        resetCache()
-
-        // فقط لیبل‌ها را به‌روز کن (بدون تماس با mpv)
         fun updateLabels() {
             txtSubSize.text = context.getString(R.string.subtitle_size_label, currentSize)
             txtSubPos.text = context.getString(R.string.subtitle_pos_label, currentPos)
             txtSubBorder.text = context.getString(R.string.subtitle_border_label, currentBorder)
         }
 
-        // اعمال روی mpv + ذخیره در prefs
         fun applyAndSave() {
             applyLiveProperties(
                 currentSize, currentPos, currentBorder,
-                currentBold, currentColor, currentBgColor, currentAssOverride
+                currentBold, currentColor, currentBgId, currentAssOverride
             )
 
             prefs.edit()
@@ -224,12 +179,11 @@ object SubtitleStyleManager {
                 .putFloat(PREF_SUB_BORDER, currentBorder.toFloat())
                 .putBoolean(PREF_SUB_BOLD, currentBold)
                 .putString(PREF_SUB_COLOR, currentColor)
-                .putString(PREF_SUB_BG_COLOR, currentBgColor)
+                .putString(PREF_SUB_BG_COLOR, currentBgId)
                 .putBoolean(PREF_SUB_ASS_OVERRIDE, currentAssOverride)
                 .apply()
         }
 
-        // debounce: هنگام درگ اسلایدر، اعمال را به تأخیر بینداز تا UI قفل نشود
         val handler = Handler(Looper.getMainLooper())
         var pendingApply: Runnable? = null
 
@@ -247,7 +201,6 @@ object SubtitleStyleManager {
             }
         }
 
-        // همگام‌سازی UI با مقادیر فعلی (بدون debounce)
         fun syncSeekBars() {
             seekSubSize.progress = (currentSize - 20).coerceIn(0, 80)
             seekSubPos.progress = currentPos.coerceIn(0, 100)
@@ -256,7 +209,6 @@ object SubtitleStyleManager {
             switchAssOverride.isChecked = currentAssOverride
         }
 
-        // تنظیم مقادیر اولیه UI
         syncSeekBars()
         updateLabels()
 
@@ -272,16 +224,14 @@ object SubtitleStyleManager {
         spinnerSubBgColor.adapter = ArrayAdapter(
             context,
             android.R.layout.simple_spinner_dropdown_item,
-            bgColors.map { context.getString(it.nameRes) }
+            bgOptions.map { context.getString(it.nameRes) }
         )
         spinnerSubBgColor.setSelection(
-            bgColors.indexOfFirst { it.hex.equals(currentBgColor, true) }.coerceAtLeast(0)
+            bgOptions.indexOfFirst { it.id == currentBgId }.coerceAtLeast(0)
         )
 
-        // اعمال اولیه‌ی مقادیر ذخیره‌شده
         applyAndSave()
 
-        // لیسنرهای اسلایدر: لیبل فوری، اعمال با debounce + اعمال قطعی هنگام رها کردن
         seekSubSize.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 if (!fromUser) return
@@ -326,7 +276,7 @@ object SubtitleStyleManager {
 
         spinnerSubBgColor.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
-                currentBgColor = bgColors[position].hex
+                currentBgId = bgOptions[position].id
                 updateLabels()
                 applyAndSave()
             }
@@ -353,7 +303,7 @@ object SubtitleStyleManager {
                 currentBorder = DEFAULT_BORDER
                 currentBold = DEFAULT_BOLD
                 currentColor = DEFAULT_COLOR
-                currentBgColor = DEFAULT_BG_COLOR
+                currentBgId = DEFAULT_BG_COLOR
                 currentAssOverride = DEFAULT_ASS_OVERRIDE
                 syncSeekBars()
                 updateLabels()
