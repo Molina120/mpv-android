@@ -139,6 +139,7 @@ object SubtitleStyleManager {
     /**
      * برای اینکه کادر پس‌زمینه واقعاً به‌صورت باکس دیده شود، libass باید
      * BorderStyle=3 (opaque box) داشته باشد؛ در غیر این صورت فقط سایه رنگ می‌گیرد.
+     * بعد از تغییر، زیرنویس را ریلود می‌کنیم تا استایل جدید اعمال شود.
      */
     private fun applyBackgroundBoxStyle(bgColor: String) {
         try {
@@ -149,9 +150,21 @@ object SubtitleStyleManager {
             try {
                 MPVLib.setPropertyString("ass-style-overrides", style)
             } catch (e: Exception) { }
+            // فورس ریلود زیرنویس تا استایل جدید اعمال شود
+            forceSubtitleReload()
         } catch (e: Exception) {
             // اگر این پراپرتی در این نسخه پشتیبانی نشود، نادیده بگیر
         }
+    }
+
+    /** ریلود زیرنویس با خاموش/روشن کردن موقت visibility */
+    private fun forceSubtitleReload() {
+        try {
+            val currentSid = MPVLib.getPropertyInt("sid")
+            // روش ۱: toggle visibility
+            MPVLib.setPropertyString("sub-visibility", "no")
+            MPVLib.setPropertyString("sub-visibility", "yes")
+        } catch (e: Exception) { }
     }
 
     /** کش را ریست کن تا اعمال بعدی همه‌چیز را ست کند (مثلاً هنگام باز شدن دیالوگ) */
