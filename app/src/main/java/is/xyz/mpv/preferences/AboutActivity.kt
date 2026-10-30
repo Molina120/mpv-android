@@ -37,9 +37,9 @@ class AboutActivity : AppCompatActivity(), MPVLib.LogObserver {
 
         logs = "mpv-android ${BuildConfig.VERSION_NAME} / ${BuildConfig.VERSION_CODE} (${BuildConfig.BUILD_TYPE})\n"
 
-        // اگر قبلاً در این فرایند پلیر اجرا شده، اطلاعات نسخه کش شده و نیازی به
-        // ساخت نمونه دوم mpv نیست (ساخت دوباره بعد از destroy کرش می‌داد)
-        val cached = MpvVersionCache.info
+        // اگر قبلاً در این فرایند پلیر اجرا شده (یا کش در SharedPreferences است)،
+        // اطلاعات نسخه کش شده و نیازی به ساخت نمونه دوم mpv نیست
+        val cached = MpvVersionCache.getCached(this)
         if (cached != null) {
             binding.logs.text = logs + cached
             return
@@ -48,13 +48,13 @@ class AboutActivity : AppCompatActivity(), MPVLib.LogObserver {
         if (tempInstanceConsumed) {
             // در این فرایند قبلاً یک نمونه موقت ساخته و نابود شده؛ ساخت نمونه
             // دوم کرش می‌دهد. کش نسخه از همان نمونه اول پر شده است.
-            binding.logs.text = logs + (MpvVersionCache.info ?: "")
+            binding.logs.text = logs + (MpvVersionCache.getCached(this) ?: "")
             return
         }
 
         // نمونه موقت را فقط یک‌بار در هر فرایند می‌سازیم؛ کش نسخه را هم ثبت
         // می‌کنیم تا بازدیدهای بعدی بدون ساخت نمونه کار کنند
-        MpvVersionCache.registerOnce()
+        MpvVersionCache.registerOnce(this)
         tempInstanceConsumed = true
 
         // create mpv context to capture version info from log

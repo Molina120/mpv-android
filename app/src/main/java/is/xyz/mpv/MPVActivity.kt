@@ -2189,6 +2189,56 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
      * از آن به بعد بندانگشتی در مرورگر نمایش داده می‌شود.
      */
     private var thumbCaptureToken = 0
+    /**
+     * ناظر خودکار دیکدر: پیش‌فرض HW است؛ اگر چند ثانیه پس از لود، ویدیو جلو نرفت
+     * (دیکدر HW گیر کرده)، خودکار یک پله جلو می‌رود: HW ← HW+ ← SW
+     */
+    private val hwdecWatchdogTask = Runnable { checkHwdecProgress() }
+
+    private fun scheduleHwdecWatchdog() {
+        eventUiHandler.removeCallbacks(hwdecWatchdogTask)
+        eventUiHandler.postDelayed(hwdecWatchdogTask, 6000)
+    }
+
+    private fun checkHwdecProgress() {
+        if (isFinishing || isDestroyed) return
+        try {
+            // فقط فایل‌های دارای ویدیو
+            if (MPVLib.getPropertyString("video-format").isNullOrEmpty()) return
+            if (MPVLib.getPropertyBoolean("paused") == true) { scheduleHwdecWatchdog(); return }
+            if (MPVLib.getPropertyBoolean("eof-reached") == true) return
+            if (MPVLib.getPropertyBoolean("paused-for-cache") == true) { scheduleHwdecWatchdog(); return }
+            val t1 = MPVLib.getPropertyDouble("time-pos") ?: return
+            eventUiHandler.postDelayed({
+                if (isFinishing || isDestroyed) return@postDelayed
+                val t2 = MPVLib.getPropertyDouble("time-pos") ?: return@postDelayed
+                if (t2 < t1) { scheduleHwdecWatchdog(); return@postDelayed } // سیک به عقب
+                if (t2 - t1 < 0.5 && advanceHwdecStage()) {
+                    // یک فرصت دیگر به مرحله بعدی زنجیره بده
+                    eventUiHandler.postDelayed(hwdecWatchdogTask, 8000)
+                }
+            }, 1500)
+        } catch (e: Exception) {
+            Log.w("MPVActivity", "hwdec watchdog failed", e)
+        }
+    }
+
+    /** رفتن به مرحله بعدی زنجیره دیکدر؛ اگر به آخر رسیده‌ایم false */
+    private fun advanceHwdecStage(): Boolean {
+        val chain = MPVView.HWDEC_CHAIN
+        val current = try { MPVLib.getPropertyString("hwdec") } catch (_: Exception) { null }
+            ?: return false
+        val idx = chain.indexOf(current)
+        if (idx < 0 || idx >= chain.size - 1) return false
+        val next = chain[idx + 1]
+        Log.w("MPVActivity", "Playback stalled with hwdec=$current, auto-switching to $next")
+        MpvBg.post {
+            try { MPVLib.setPropertyString("hwdec", next) }
+            catch (e: Exception) { Log.w("MPVActivity", "hwdec switch failed", e) }
+        }
+        return true
+    }
+
     private fun scheduleThumbCapture() {
         val vid = intentVideoId ?: return
         val appCtx = applicationContext
@@ -2245,6 +2295,7 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             autoLoadExternalTracks()
             applyPendingResume()
             scheduleThumbCapture()
+            scheduleHwdecWatchdog()
         }
 
         if (eventId == MpvEvent.MPV_EVENT_START_FILE) {

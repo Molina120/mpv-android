@@ -29,12 +29,12 @@ internal class MPVView(context: Context, attrs: AttributeSet) : BaseMPVView(cont
         else
             "gpu")
 
-        // hwdec: حالت auto یعنی اول همه دیکدرهای سخت‌افزاری موجود امتحان می‌شوند
-        // و اگر هیچ‌کدام جواب نداد خودکار به نرم‌افزاری برمی‌گردد
+        // hwdec: پیش‌فرض HW خالص (mediacodec)؛ اگر پخش جلو نرفت، ناظر MPVActivity
+        // خودکار به HW+ (mediacodec-copy) و بعد SW (no) می‌رود
         val hwdec = if (sharedPreferences.getBoolean("hardware_decoding", true))
-            HWDECS
+            HWDEC_HW
         else
-            "no"
+            HWDEC_SW
 
         // vo: set display fps as reported by android
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -358,7 +358,7 @@ internal class MPVView(context: Context, attrs: AttributeSet) : BaseMPVView(cont
     fun cyclePause() = MPVLib.command(arrayOf("cycle", "pause"))
     fun cycleAudio() = MPVLib.command(arrayOf("cycle", "audio"))
     fun cycleSub() = MPVLib.command(arrayOf("cycle", "sub"))
-    fun cycleHwdec() = MPVLib.command(arrayOf("cycle-values", "hwdec", HWDECS, "no"))
+    fun cycleHwdec() = MPVLib.command(arrayOf("cycle-values", "hwdec", HWDEC_HW, HWDEC_HWPLUS, HWDEC_SW))
 
     fun cycleSpeed() {
         val speeds = arrayOf(0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0)
@@ -404,7 +404,10 @@ internal class MPVView(context: Context, attrs: AttributeSet) : BaseMPVView(cont
     companion object {
         private const val TAG = "mpv"
 
-        // mpv option `hwdec` is set to this
-        private const val HWDECS = "auto"
+        // زنجیره خودکار دیکدر: HW (سخت‌افزاری خالص) ← HW+ (کپی‌بک) ← SW (نرم‌افزاری)
+        const val HWDEC_HW = "mediacodec"
+        const val HWDEC_HWPLUS = "mediacodec-copy"
+        const val HWDEC_SW = "no"
+        val HWDEC_CHAIN = arrayOf(HWDEC_HW, HWDEC_HWPLUS, HWDEC_SW)
     }
 }

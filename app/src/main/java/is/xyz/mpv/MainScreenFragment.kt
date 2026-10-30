@@ -1,6 +1,5 @@
 package `is`.xyz.mpv
 
-import `is`.xyz.mpv.MPVLib.MpvEvent
 import `is`.xyz.mpv.preferences.PreferenceActivity
 import `is`.xyz.mpv.databinding.FragmentMainScreenBinding
 import android.Manifest
@@ -12,31 +11,24 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
-import android.graphics.SurfaceTexture
 import android.media.Image
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.net.Uri
-import android.opengl.EGL14
-import android.opengl.EGLConfig
-import android.opengl.GLES11Ext
-import android.opengl.GLES20
-import android.opengl.Matrix
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.HandlerThread
 import android.provider.MediaStore
 import android.util.Log
 import android.util.LruCache
 import android.util.Size
 import android.view.LayoutInflater
 import android.view.MenuItem
-import android.view.Surface
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
+import android.widget.EditText
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
@@ -56,7 +48,6 @@ import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import java.util.Collections
 import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.max
 
 /**
@@ -83,6 +74,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
 
     /** متن جستجو در مرورگر */
     private var searchQuery: String = ""
+    private var searchMenuItem: MenuItem? = null
 
     /** کش بندانگشتی‌ها در رم: حداکثر ~32 مگابایت */
     private val thumbCache = object : LruCache<Long, Bitmap>(32 * 1024) {
@@ -94,44 +86,6 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
 
     /** ویدیوهایی که ساخت بندانگشتی‌شان در این نشست ناموفق بود */
     private val thumbFailed = Collections.synchronizedSet(mutableSetOf<Long>())
-
-    /** شمارنده تسک‌های فعال برای بستن خودکار موتور کمکی mpv پس از اتمام ساخت بندانگشتی‌ها */
-    private val activeDecodeTasks = AtomicInteger(0)
-
-    /** قفل و وضعیت موتور کمکی MPVLib برای ویدیوهای 10-bit x265 و 4K HDR10+ */
-    private val mpvThumbLock = Object()
-    @Volatile
-    private var isPlayerActivityActive = false
-    private var mpvThumbActive = false
-    private var mpvThumbSurface: MpvOffscreenSurface? = null
-    private val mpvRestartSync = Object()
-    @Volatile
-    private var mpvPlaybackRestarted = false
-    @Volatile
-    private var mpvFileEnded = false
-
-    private val mpvThumbObserver = object : MPVLib.EventObserver {
-        override fun eventProperty(property: String) {}
-        override fun eventProperty(property: String, value: Long) {}
-        override fun eventProperty(property: String, value: Boolean) {}
-        override fun eventProperty(property: String, value: String) {}
-        override fun eventProperty(property: String, value: Double) {}
-        override fun event(eventId: Int) {
-            if (eventId == MpvEvent.MPV_EVENT_PLAYBACK_RESTART ||
-                eventId == MpvEvent.MPV_EVENT_VIDEO_RECONFIG
-            ) {
-                synchronized(mpvRestartSync) {
-                    mpvPlaybackRestarted = true
-                    mpvRestartSync.notifyAll()
-                }
-            } else if (eventId == MpvEvent.MPV_EVENT_END_FILE) {
-                synchronized(mpvRestartSync) {
-                    mpvFileEnded = true
-                    mpvRestartSync.notifyAll()
-                }
-            }
-        }
-    }
 
     private var folders: List<VideoScanner.Folder> = emptyList()
     private var openFolder: VideoScanner.Folder? = null
@@ -196,11 +150,22 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
 
     private val backCallback = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() {
+            // اگر سرچ باز است، اول سرچ بسته شود نه خروج از برنامه
+            val si = searchMenuItem
+            if (si != null && si.isActionViewExpanded) {
+                si.collapseActionView()
+                return
+            }
             if (openFolder != null) showFolders() else {
                 isEnabled = false
                 requireActivity().onBackPressed()
             }
         }
+    }
+
+    private fun updateBackCallback() {
+        backCallback.isEnabled =
+            openFolder != null || searchMenuItem?.isActionViewExpanded == true
     }
 
     private val videoPermission: String
@@ -249,7 +214,6 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             }
         }
         playerLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-            isPlayerActivityActive = false
             Log.v(TAG, "returned from player ($it)")
         }
         permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -274,6 +238,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         binding.toolbar.title = getString(R.string.browser_folders)
         binding.toolbar.inflateMenu(R.menu.browser_menu)
         val searchItem = binding.toolbar.menu.findItem(R.id.menu_search)
+        searchMenuItem = searchItem
         val searchView = searchItem.actionView as SearchView
         searchView.queryHint = getString(R.string.search_hint)
         searchView.setOnQueryTextListener(object : SearchView.OnQueryTextListener {
@@ -285,10 +250,21 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             }
         })
         searchItem.setOnActionExpandListener(object : MenuItem.OnActionExpandListener {
-            override fun onMenuItemActionExpand(item: MenuItem): Boolean = true
+            override fun onMenuItemActionExpand(item: MenuItem): Boolean {
+                // فوکوس خودکار + باز شدن کیبورد (علامت چشمک‌زن تایپ)
+                searchView.post {
+                    val et = searchView.findViewById<EditText>(androidx.appcompat.R.id.search_src_text)
+                    (et ?: searchView).requestFocus()
+                    val imm = requireContext().getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                    imm.showSoftInput(et ?: searchView, InputMethodManager.SHOW_IMPLICIT)
+                }
+                updateBackCallback()
+                return true
+            }
             override fun onMenuItemActionCollapse(item: MenuItem): Boolean {
                 searchQuery = ""
                 refreshDisplay()
+                updateBackCallback()
                 return true
             }
         })
@@ -324,7 +300,6 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
 
     override fun onResume() {
         super.onResume()
-        isPlayerActivityActive = false
         if (hasPermission() && !loadedOnce &&
             binding.permissionView.isVisible) {
             loadVideos()
@@ -506,7 +481,6 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         imageView: ImageView
     ) {
         if (!thumbInProgress.add(video.id)) return
-        activeDecodeTasks.incrementAndGet()
 
         thumbDecodeExecutor.execute {
             try {
@@ -522,17 +496,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                     }
                 }
 
-                // ۳. تلاش سوم (قطعی برای 10-bit x265، 4K HDR10+ و Dolby Vision):
-                // استفاده از موتور داخلی خود mpv (FFmpeg) و متد بومی MPVLib.grabThumbnail
-                if (rawBmp == null || isMostlyBlack(rawBmp)) {
-                    val mpvBmp = extractFrameWithMpvEngine(appCtx, video)
-                    if (mpvBmp != null && (!isMostlyBlack(mpvBmp) || rawBmp == null)) {
-                        if (rawBmp != null && rawBmp !== mpvBmp) rawBmp.recycle()
-                        rawBmp = mpvBmp
-                    }
-                }
-
-                // ۴. تلاش نهایی با بندانگشتی پیش‌فرض سیستم
+                // ۳. تلاش نهایی با بندانگشتی پیش‌فرض سیستم
                 if (rawBmp == null || isMostlyBlack(rawBmp)) {
                     val sysBmp = loadSystemThumbnail(appCtx, video)
                     if (sysBmp != null && (!isMostlyBlack(sysBmp) || rawBmp == null)) {
@@ -581,9 +545,6 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                 thumbFailed.add(video.id)
             } finally {
                 thumbInProgress.remove(video.id)
-                if (activeDecodeTasks.decrementAndGet() <= 0) {
-                    shutdownMpvThumbnailer()
-                }
             }
         }
     }
@@ -1103,406 +1064,6 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         return (0xFF shl 24) or (r shl 16) or (g shl 8) or b
     }
 
-    /**
-     * مرحله ۳ (موتور داخلی mpv / FFmpeg):
-     * بازگشایی صددرصدی تمام فرمت‌های x265 10-bit، 4K HDR10+ و Dolby Vision با خود libmpv
-     */
-    private fun extractFrameWithMpvEngine(appCtx: Context, video: VideoScanner.Video): Bitmap? {
-        if (isPlayerActivityActive || BackgroundPlaybackService.isRunning) return null
-
-        synchronized(mpvThumbLock) {
-            if (isPlayerActivityActive || BackgroundPlaybackService.isRunning) return null
-            return try {
-                if (!mpvThumbActive) {
-                    Utils.copyAssets(appCtx)
-                    mpvThumbSurface = MpvOffscreenSurface(THUMB_WIDTH, THUMB_HEIGHT)
-                    MPVLib.create(appCtx)
-                    MPVLib.setOptionString("config", "no")
-                    MPVLib.setOptionString("gpu-context", "android")
-                    MPVLib.setOptionString("opengl-es", "yes")
-                    MPVLib.setOptionString("vo", "gpu")
-                    // استفاده از دیکدر نرم‌افزاری FFmpeg برای پشتیبانی قطعی از 10bit x265 و HDR10+
-                    MPVLib.setOptionString("hwdec", "no")
-                    MPVLib.setOptionString("vd-lavc-fast", "yes")
-                    MPVLib.setOptionString("vd-lavc-skiploopfilter", "nonkey")
-                    MPVLib.setOptionString("ao", "null")
-                    MPVLib.setOptionString("vid", "1")
-                    MPVLib.setOptionString("aid", "no")
-                    MPVLib.setOptionString("sid", "no")
-                    MPVLib.setOptionString("sub-auto", "no")
-                    MPVLib.setOptionString("audio-file-auto", "no")
-                    MPVLib.setOptionString("pause", "yes")
-                    MPVLib.setOptionString("keep-open", "yes")
-                    MPVLib.setOptionString("hr-seek", "no")
-                    MPVLib.setOptionString("idle", "yes")
-                    MPVLib.setOptionString("force-window", "no")
-                    MPVLib.init()
-
-                    mpvThumbSurface?.surface?.let { surf ->
-                        MPVLib.attachSurface(surf)
-                        MPVLib.setPropertyString(
-                            "android-surface-size", "${THUMB_WIDTH}x${THUMB_HEIGHT}"
-                        )
-                        MPVLib.setOptionString("force-window", "yes")
-                    }
-                    MPVLib.addObserver(mpvThumbObserver)
-                    mpvThumbActive = true
-                }
-
-                val filepath = resolveVideoPathForMpv(appCtx, video.uri)
-                val startPercent = if (video.durationMs > 15_000L) "15%" else "0"
-                MPVLib.setOptionString("start", startPercent)
-
-                synchronized(mpvRestartSync) {
-                    mpvPlaybackRestarted = false
-                    mpvFileEnded = false
-                }
-
-                MPVLib.command(arrayOf("loadfile", filepath, "replace"))
-
-                // انتظار تا آماده شدن اولین فریم ویدیو در libmpv
-                waitForMpvFrame(2500L)
-                if (isPlayerActivityActive || BackgroundPlaybackService.isRunning) return null
-
-                var bmp = grabCurrentMpvBitmap()
-                if (bmp == null || isMostlyBlack(bmp)) {
-                    for (seekPct in arrayOf("28", "45", "10")) {
-                        if (isPlayerActivityActive || BackgroundPlaybackService.isRunning) break
-                        synchronized(mpvRestartSync) {
-                            mpvPlaybackRestarted = false
-                        }
-                        MPVLib.command(arrayOf("seek", seekPct, "absolute-percent+keyframes"))
-                        waitForMpvFrame(1200L)
-                        val candidate = grabCurrentMpvBitmap()
-                        if (candidate != null) {
-                            if (!isMostlyBlack(candidate)) {
-                                if (bmp != null && bmp !== candidate) bmp.recycle()
-                                bmp = candidate
-                                break
-                            }
-                            if (bmp == null) bmp = candidate else candidate.recycle()
-                        }
-                    }
-                }
-                bmp
-            } catch (e: Exception) {
-                Log.w(TAG, "MPV engine thumb extraction failed: ${video.name}", e)
-                shutdownMpvThumbnailer()
-                null
-            }
-        }
-    }
-
-    private fun waitForMpvFrame(timeoutMs: Long) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        synchronized(mpvRestartSync) {
-            while (!mpvPlaybackRestarted && !mpvFileEnded && !isPlayerActivityActive &&
-                !BackgroundPlaybackService.isRunning
-            ) {
-                val rem = deadline - System.currentTimeMillis()
-                if (rem <= 0L) break
-                try { mpvRestartSync.wait(rem.coerceAtMost(80L)) } catch (_: InterruptedException) { break }
-            }
-        }
-        // فرصت کوتاه به ترد رندر برای تکمیل فریم
-        if (!isPlayerActivityActive && !mpvFileEnded && !BackgroundPlaybackService.isRunning) {
-            try { Thread.sleep(40L) } catch (_: InterruptedException) { }
-        }
-    }
-
-    private fun grabCurrentMpvBitmap(): Bitmap? {
-        val fmt = MPVLib.getPropertyString("video-format")
-        if (!fmt.isNullOrEmpty()) {
-            try {
-                MPVLib.grabThumbnail(THUMB_WIDTH)?.let { return it }
-            } catch (_: Exception) { }
-        }
-        return mpvThumbSurface?.readRenderedBitmap()
-    }
-
-    private fun resolveVideoPathForMpv(appCtx: Context, uri: Uri): String {
-        try {
-            appCtx.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
-                val path = Utils.findRealPath(pfd.fd)
-                if (path != null) return path
-            }
-        } catch (_: Exception) { }
-        return uri.toString()
-    }
-
-    private fun shutdownMpvThumbnailer() {
-        synchronized(mpvRestartSync) {
-            mpvFileEnded = true
-            mpvRestartSync.notifyAll()
-        }
-        synchronized(mpvThumbLock) {
-            if (!mpvThumbActive) return
-            mpvThumbActive = false
-            try { MPVLib.removeObserver(mpvThumbObserver) } catch (_: Exception) { }
-            try { MPVLib.setPropertyString("vo", "null") } catch (_: Exception) { }
-            try { MPVLib.setPropertyString("force-window", "no") } catch (_: Exception) { }
-            try { MPVLib.detachSurface() } catch (_: Exception) { }
-            try { MPVLib.destroy() } catch (_: Exception) { }
-            try { mpvThumbSurface?.release() } catch (_: Exception) { }
-            mpvThumbSurface = null
-        }
-    }
-
-    /**
-     * سطح گرافیکی مخفی روی یک HandlerThread اختصاصی که فریم‌های رندرشده توسط libmpv را مصرف و به Bitmap تبدیل می‌کند
-     */
-    private class MpvOffscreenSurface(val width: Int, val height: Int) {
-        private val glThread = HandlerThread("MpvThumbGL").apply { start() }
-        private val glHandler = Handler(glThread.looper)
-
-        private var eglDisplay = EGL14.EGL_NO_DISPLAY
-        private var eglContext = EGL14.EGL_NO_CONTEXT
-        private var eglSurface = EGL14.EGL_NO_SURFACE
-        private var textureId = 0
-        private var program = 0
-        private var surfaceTexture: SurfaceTexture? = null
-        var surface: Surface? = null
-            private set
-
-        @Volatile
-        private var hasRenderedFrame = false
-        private val stMatrix = FloatArray(16)
-        private val mvpMatrix = FloatArray(16)
-
-        private val vertexBuffer: FloatBuffer = ByteBuffer.allocateDirect(4 * 4 * 4)
-            .order(ByteOrder.nativeOrder())
-            .asFloatBuffer()
-            .apply {
-                put(floatArrayOf(
-                    -1f, -1f, 0f, 1f,
-                     1f, -1f, 1f, 1f,
-                    -1f,  1f, 0f, 0f,
-                     1f,  1f, 1f, 0f
-                ))
-                position(0)
-            }
-
-        init {
-            val initLock = Object()
-            var initDone = false
-            glHandler.post {
-                try {
-                    initGl()
-                } catch (_: Exception) {
-                } finally {
-                    synchronized(initLock) {
-                        initDone = true
-                        initLock.notifyAll()
-                    }
-                }
-            }
-            synchronized(initLock) {
-                while (!initDone) {
-                    try { initLock.wait(500L); break } catch (_: InterruptedException) { break }
-                }
-            }
-        }
-
-        private fun initGl() {
-            eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
-            val version = IntArray(2)
-            EGL14.eglInitialize(eglDisplay, version, 0, version, 1)
-
-            val attribList = intArrayOf(
-                EGL14.EGL_RED_SIZE, 8,
-                EGL14.EGL_GREEN_SIZE, 8,
-                EGL14.EGL_BLUE_SIZE, 8,
-                EGL14.EGL_ALPHA_SIZE, 8,
-                EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
-                EGL14.EGL_SURFACE_TYPE, EGL14.EGL_PBUFFER_BIT,
-                EGL14.EGL_NONE
-            )
-            val configs = arrayOfNulls<EGLConfig>(1)
-            val numConfigs = IntArray(1)
-            EGL14.eglChooseConfig(eglDisplay, attribList, 0, configs, 0, 1, numConfigs, 0)
-
-            val ctxAttribs = intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE)
-            eglContext = EGL14.eglCreateContext(
-                eglDisplay, configs[0], EGL14.EGL_NO_CONTEXT, ctxAttribs, 0
-            )
-
-            val surfaceAttribs = intArrayOf(
-                EGL14.EGL_WIDTH, width,
-                EGL14.EGL_HEIGHT, height,
-                EGL14.EGL_NONE
-            )
-            eglSurface = EGL14.eglCreatePbufferSurface(eglDisplay, configs[0], surfaceAttribs, 0)
-            EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
-
-            val textures = IntArray(1)
-            GLES20.glGenTextures(1, textures, 0)
-            textureId = textures[0]
-            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
-            GLES20.glTexParameterf(
-                GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR.toFloat()
-            )
-            GLES20.glTexParameterf(
-                GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR.toFloat()
-            )
-            GLES20.glTexParameteri(
-                GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE
-            )
-            GLES20.glTexParameteri(
-                GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE
-            )
-
-            program = createProgram(VERTEX_SHADER, FRAGMENT_SHADER)
-            Matrix.setIdentityM(mvpMatrix, 0)
-
-            surfaceTexture = SurfaceTexture(textureId).apply {
-                setDefaultBufferSize(width, height)
-                setOnFrameAvailableListener({ st ->
-                    try {
-                        EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
-                        st.updateTexImage()
-                        hasRenderedFrame = true
-                    } catch (_: Exception) { }
-                }, glHandler)
-            }
-            surface = Surface(surfaceTexture)
-        }
-
-        fun readRenderedBitmap(): Bitmap? {
-            if (!hasRenderedFrame) return null
-            var result: Bitmap? = null
-            val lock = Object()
-            var done = false
-            glHandler.post {
-                try {
-                    EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
-                    surfaceTexture?.updateTexImage()
-                    surfaceTexture?.getTransformMatrix(stMatrix)
-
-                    GLES20.glViewport(0, 0, width, height)
-                    GLES20.glClearColor(0f, 0f, 0f, 1f)
-                    GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
-
-                    GLES20.glUseProgram(program)
-                    val posHandle = GLES20.glGetAttribLocation(program, "aPosition")
-                    val texHandle = GLES20.glGetAttribLocation(program, "aTextureCoord")
-                    val mvpHandle = GLES20.glGetUniformLocation(program, "uMVPMatrix")
-                    val stHandle = GLES20.glGetUniformLocation(program, "uSTMatrix")
-
-                    vertexBuffer.position(0)
-                    GLES20.glVertexAttribPointer(posHandle, 2, GLES20.GL_FLOAT, false, 16, vertexBuffer)
-                    GLES20.glEnableVertexAttribArray(posHandle)
-
-                    vertexBuffer.position(2)
-                    GLES20.glVertexAttribPointer(texHandle, 2, GLES20.GL_FLOAT, false, 16, vertexBuffer)
-                    GLES20.glEnableVertexAttribArray(texHandle)
-
-                    GLES20.glUniformMatrix4fv(mvpHandle, 1, false, mvpMatrix, 0)
-                    GLES20.glUniformMatrix4fv(stHandle, 1, false, stMatrix, 0)
-
-                    GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-                    GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
-                    GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
-                    GLES20.glFinish()
-
-                    val buf = ByteBuffer.allocateDirect(width * height * 4).order(ByteOrder.LITTLE_ENDIAN)
-                    GLES20.glReadPixels(0, 0, width, height, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, buf)
-                    buf.rewind()
-
-                    val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-                    bmp.copyPixelsFromBuffer(buf)
-                    result = bmp
-                } catch (_: Exception) {
-                } finally {
-                    synchronized(lock) {
-                        done = true
-                        lock.notifyAll()
-                    }
-                }
-            }
-            synchronized(lock) {
-                if (!done) {
-                    try { lock.wait(400L) } catch (_: InterruptedException) { }
-                }
-            }
-            return result
-        }
-
-        fun release() {
-            val lock = Object()
-            var done = false
-            glHandler.post {
-                try {
-                    if (eglDisplay !== EGL14.EGL_NO_DISPLAY) {
-                        EGL14.eglMakeCurrent(
-                            eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT
-                        )
-                        EGL14.eglDestroySurface(eglDisplay, eglSurface)
-                        EGL14.eglDestroyContext(eglDisplay, eglContext)
-                        EGL14.eglTerminate(eglDisplay)
-                    }
-                    eglDisplay = EGL14.EGL_NO_DISPLAY
-                    eglContext = EGL14.EGL_NO_CONTEXT
-                    eglSurface = EGL14.EGL_NO_SURFACE
-                    surface?.release()
-                    surfaceTexture?.release()
-                } catch (_: Exception) {
-                } finally {
-                    synchronized(lock) {
-                        done = true
-                        lock.notifyAll()
-                    }
-                }
-            }
-            synchronized(lock) {
-                if (!done) {
-                    try { lock.wait(300L) } catch (_: InterruptedException) { }
-                }
-            }
-            glThread.quitSafely()
-        }
-
-        private fun createProgram(vertexSource: String, fragmentSource: String): Int {
-            val vs = loadShader(GLES20.GL_VERTEX_SHADER, vertexSource)
-            val fs = loadShader(GLES20.GL_FRAGMENT_SHADER, fragmentSource)
-            val prog = GLES20.glCreateProgram()
-            GLES20.glAttachShader(prog, vs)
-            GLES20.glAttachShader(prog, fs)
-            GLES20.glLinkProgram(prog)
-            return prog
-        }
-
-        private fun loadShader(type: Int, source: String): Int {
-            val shader = GLES20.glCreateShader(type)
-            GLES20.glShaderSource(shader, source)
-            GLES20.glCompileShader(shader)
-            return shader
-        }
-
-        companion object {
-            private val VERTEX_SHADER = """
-                uniform mat4 uMVPMatrix;
-                uniform mat4 uSTMatrix;
-                attribute vec4 aPosition;
-                attribute vec4 aTextureCoord;
-                varying vec2 vTextureCoord;
-                void main() {
-                    gl_Position = uMVPMatrix * aPosition;
-                    vTextureCoord = (uSTMatrix * aTextureCoord).xy;
-                }
-            """.trimIndent()
-
-            private val FRAGMENT_SHADER = """
-                #extension GL_OES_EGL_image_external : require
-                precision mediump float;
-                varying vec2 vTextureCoord;
-                uniform samplerExternalOES sTexture;
-                void main() {
-                    gl_FragColor = texture2D(sTexture, vTextureCoord);
-                }
-            """.trimIndent()
-        }
-    }
-
     private fun loadSystemThumbnail(appCtx: Context, video: VideoScanner.Video): Bitmap? {
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -1581,10 +1142,19 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
     private fun loadVideos() {
         binding.permissionView.isVisible = false
         binding.emptyView.isVisible = false
-        binding.loading.isVisible = true
+        binding.loading.isVisible = false // حذف کامل نمایش اسپینر لودینگ
+
+        // اگر از قبل اسکن شده، بلافاصله بدون مکث نمایش بده
+        if (cachedFolders.isNotEmpty() && folders.isEmpty()) {
+            folders = cachedFolders
+            loadedOnce = true
+            showFolders()
+        }
+
         val appCtx = requireContext().applicationContext
         scanner.execute {
             val result = VideoScanner.scan(appCtx)
+            cachedFolders = result
             preloadDiskThumbnails(appCtx, result)
             if (!isAdded) return@execute
             requireActivity().runOnUiThread {
@@ -1609,7 +1179,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
 
     private fun showFolders() {
         openFolder = null
-        backCallback.isEnabled = false
+        updateBackCallback()
         binding.toolbar.navigationIcon = null
         val adapter = binding.videoList.adapter as BrowserAdapter
         val q = searchQuery
@@ -1633,7 +1203,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
 
     private fun showVideos(folder: VideoScanner.Folder) {
         openFolder = folder
-        backCallback.isEnabled = true
+        updateBackCallback()
         binding.toolbar.title = folder.name
         binding.toolbar.subtitle = resources.getQuantityString(
             R.plurals.browser_videos_count, folder.videos.size, folder.videos.size)
@@ -1755,10 +1325,6 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
     }
 
     private fun playFile(filepath: String, resumeMs: Long = 0L) {
-        // آزادسازی فوری موتور کمکی mpv قبل از باز شدن MPVActivity
-        isPlayerActivityActive = true
-        shutdownMpvThumbnailer()
-
         val i: Intent
         if (filepath.startsWith("content://")) {
             i = Intent(Intent.ACTION_VIEW, Uri.parse(filepath))
@@ -1772,8 +1338,6 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
     }
 
     override fun onDestroy() {
-        isPlayerActivityActive = true
-        shutdownMpvThumbnailer()
         scanner.shutdown()
         diskCacheExecutor.shutdown()
         thumbDecodeExecutor.shutdown()
@@ -1784,5 +1348,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         private const val TAG = "MainScreenFragment"
         private const val THUMB_WIDTH = 560
         private const val THUMB_HEIGHT = 360
+        @Volatile
+        private var cachedFolders: List<VideoScanner.Folder> = emptyList()
     }
 }

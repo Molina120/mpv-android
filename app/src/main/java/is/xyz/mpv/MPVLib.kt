@@ -120,10 +120,9 @@ object MPVLib {
 
     @JvmStatic
     fun logMessage(prefix: String, level: Int, text: String) {
-        synchronized(log_observers) {
-            for (o in log_observers)
-                o.logMessage(prefix, level, text)
-        }
+        val snapshot = synchronized(log_observers) { log_observers.toList() }
+        for (o in snapshot)
+            o.logMessage(prefix, level, text)
     }
 
     interface EventObserver {
