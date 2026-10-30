@@ -5,6 +5,9 @@
         android:icon="@drawable/ic_sd_card_white_24dp"
         android:title="@string/browser_refresh" />
     <item
+        android:id="@+id/menu_sort"
+        android:title="@string/sort_by" />
+    <item
         android:id="@+id/menu_open_file"
         android:title="@string/file_picker_old" />
     <item

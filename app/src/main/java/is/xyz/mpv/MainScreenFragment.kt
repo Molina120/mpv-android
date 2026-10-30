@@ -18,6 +18,7 @@ import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
@@ -44,6 +45,50 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
     private var loadedOnce = false
 
     private var lastPath = ""
+
+    /** مرتب‌سازی لیست‌ها */
+    private enum class SortBy { TITLE, DATE, DURATION, SIZE }
+    private var sortBy: SortBy = SortBy.DATE
+    private var sortDescending: Boolean = true
+
+    private fun loadSortPref() {
+        val prefs = androidx.preference.PreferenceManager
+            .getDefaultSharedPreferences(requireContext())
+        sortBy = try {
+            SortBy.valueOf(prefs.getString("browser_sort_by", SortBy.DATE.name) ?: SortBy.DATE.name)
+        } catch (e: Exception) { SortBy.DATE }
+        sortDescending = prefs.getBoolean("browser_sort_desc", true)
+    }
+
+    private fun saveSortPref() {
+        androidx.preference.PreferenceManager.getDefaultSharedPreferences(requireContext())
+            .edit()
+            .putString("browser_sort_by", sortBy.name)
+            .putBoolean("browser_sort_desc", sortDescending)
+            .apply()
+    }
+
+    private fun sortedFolders(): List<VideoScanner.Folder> {
+        val cmp: Comparator<VideoScanner.Folder> = when (sortBy) {
+            SortBy.TITLE -> compareBy { it.name.lowercase() }
+            SortBy.DATE -> compareBy { f -> f.videos.maxOfOrNull { it.dateModifiedSec } ?: 0L }
+            SortBy.DURATION -> compareBy { f -> f.videos.sumOf { it.durationMs } }
+            SortBy.SIZE -> compareBy { it.totalSize }
+        }
+        val sorted = folders.sortedWith(cmp)
+        return if (sortDescending) sorted.reversed() else sorted
+    }
+
+    private fun sortedVideos(folder: VideoScanner.Folder): List<VideoScanner.Video> {
+        val cmp: Comparator<VideoScanner.Video> = when (sortBy) {
+            SortBy.TITLE -> compareBy { it.name.lowercase() }
+            SortBy.DATE -> compareBy { it.dateModifiedSec }
+            SortBy.DURATION -> compareBy { it.durationMs }
+            SortBy.SIZE -> compareBy { it.sizeBytes }
+        }
+        val sorted = folder.videos.sortedWith(cmp)
+        return if (sortDescending) sorted.reversed() else sorted
+    }
 
     private val backCallback = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() {
@@ -128,6 +173,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         binding.toolbar.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 R.id.menu_refresh -> { loadVideos(); true }
+                R.id.menu_sort -> { showSortDialog(); true }
                 R.id.menu_open_file -> { openLegacyFilePicker(); true }
                 R.id.menu_open_folder -> { openDocumentTree(); true }
                 R.id.menu_open_url -> { openUrlDialog(); true }
@@ -145,6 +191,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
 
         requireActivity().onBackPressedDispatcher.addCallback(viewLifecycleOwner, backCallback)
 
+        loadSortPref()
         if (hasPermission()) loadVideos() else showPermissionView()
     }
 
@@ -249,8 +296,9 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         binding.toolbar.subtitle = null
         binding.toolbar.navigationIcon = null
         val adapter = binding.videoList.adapter as BrowserAdapter
-        adapter.items = folders.map { BrowserItem.FolderRow(it) }
-        binding.emptyView.isVisible = folders.isEmpty()
+        val list = sortedFolders()
+        adapter.items = list.map { BrowserItem.FolderRow(it) }
+        binding.emptyView.isVisible = list.isEmpty()
         binding.videoList.scrollToPosition(0)
     }
 
@@ -263,9 +311,51 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         binding.toolbar.navigationIcon =
             ContextCompat.getDrawable(requireContext(), R.drawable.ic_back_24dp)
         val adapter = binding.videoList.adapter as BrowserAdapter
-        adapter.items = folder.videos.map { BrowserItem.VideoRow(it) }
-        binding.emptyView.isVisible = folder.videos.isEmpty()
+        val list = sortedVideos(folder)
+        adapter.items = list.map { BrowserItem.VideoRow(it) }
+        binding.emptyView.isVisible = list.isEmpty()
         binding.videoList.scrollToPosition(0)
+    }
+
+    /** دیالوگ مرتب‌سازی به سبک MX Player */
+    private fun showSortDialog() {
+        val criteria = arrayOf(SortBy.TITLE, SortBy.DATE, SortBy.DURATION, SortBy.SIZE)
+        val labels = arrayOf(
+            getString(R.string.sort_title),
+            getString(R.string.sort_date),
+            getString(R.string.sort_duration),
+            getString(R.string.sort_size)
+        )
+        var selected = criteria.indexOf(sortBy).coerceAtLeast(0)
+        AlertDialog.Builder(requireContext())
+            .setTitle(R.string.sort_by)
+            .setSingleChoiceItems(labels, selected) { _, which -> selected = which }
+            .setPositiveButton(R.string.dialog_ok) { d, _ ->
+                sortBy = criteria[selected]
+                saveSortPref()
+                refreshDisplay()
+                d.dismiss()
+            }
+            .setNeutralButton(
+                if (sortDescending) R.string.sort_order_newest_first else R.string.sort_order_oldest_first
+            ) { d, _ ->
+                sortDescending = !sortDescending
+                saveSortPref()
+                refreshDisplay()
+                d.dismiss()
+            }
+            .setNegativeButton(R.string.dialog_cancel, null)
+            .show()
+    }
+
+    private fun refreshDisplay() {
+        val folder = openFolder
+        if (folder != null) {
+            val updated = folders.find { it.name == folder.name }
+            if (updated != null) showVideos(updated) else showFolders()
+        } else {
+            showFolders()
+        }
     }
 
     private fun showPermissionView() {

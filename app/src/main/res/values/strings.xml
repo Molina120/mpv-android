@@ -262,4 +262,13 @@
         <item quantity="one">%d video</item>
         <item quantity="other">%d videos</item>
     </plurals>
+
+    <!-- Sort (video browser) -->
+    <string name="sort_by">Sort by</string>
+    <string name="sort_title">Title</string>
+    <string name="sort_date">Date</string>
+    <string name="sort_duration">Duration</string>
+    <string name="sort_size">Size</string>
+    <string name="sort_order_newest_first">↓ Newest first</string>
+    <string name="sort_order_oldest_first">↑ Oldest first</string>
 </resources>

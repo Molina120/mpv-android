@@ -19,6 +19,7 @@ object VideoScanner {
         val name: String,
         val durationMs: Long,
         val sizeBytes: Long,
+        val dateModifiedSec: Long,
         val folder: String
     )
 
@@ -43,12 +44,14 @@ object VideoScanner {
                 val nameCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
                 val durCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION)
                 val sizeCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.SIZE)
+                val dateCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_MODIFIED)
                 val bucketCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
                 while (c.moveToNext()) {
                     val id = c.getLong(idCol)
                     val name = c.getString(nameCol) ?: continue
                     val duration = try { c.getLong(durCol) } catch (e: Exception) { 0L }
                     val size = try { c.getLong(sizeCol) } catch (e: Exception) { 0L }
+                    val dateMod = try { c.getLong(dateCol) } catch (e: Exception) { 0L }
                     val bucket = c.getString(bucketCol).takeUnless { it.isNullOrEmpty() } ?: "-"
                     videos.add(
                         Video(
@@ -57,6 +60,7 @@ object VideoScanner {
                             name = name,
                             durationMs = duration,
                             sizeBytes = size,
+                            dateModifiedSec = dateMod,
                             folder = bucket
                         )
                     )

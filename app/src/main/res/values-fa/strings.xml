@@ -240,4 +240,13 @@
         <item quantity="one">%d ویدیو</item>
         <item quantity="other">%d ویدیو</item>
     </plurals>
+
+    <!-- Sort (video browser) -->
+    <string name="sort_by">مرتب‌سازی بر اساس</string>
+    <string name="sort_title">عنوان</string>
+    <string name="sort_date">تاریخ</string>
+    <string name="sort_duration">مدت‌زمان</string>
+    <string name="sort_size">حجم</string>
+    <string name="sort_order_newest_first">↓ جدیدترین اول</string>
+    <string name="sort_order_oldest_first">↑ قدیمی‌ترین اول</string>
 </resources>

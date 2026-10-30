@@ -7,7 +7,8 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        supportActionBar?.setTitle(R.string.mpv_activity)
+        // مرورگر ویدیو تولبار خودش را دارد؛ اکشن‌بار اکتیویتی مخفی می‌شود
+        supportActionBar?.hide()
 
         // The original plan was to have the file/doc picker live as fragments
         // under here but that requires refactoring I'm really not willing to figure out now.
