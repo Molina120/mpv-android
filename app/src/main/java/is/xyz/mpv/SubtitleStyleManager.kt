@@ -2,11 +2,14 @@ package `is`.xyz.mpv
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.preference.PreferenceManager
 import android.view.LayoutInflater
 import android.view.View
+import android.view.WindowInsets
+import android.view.WindowManager
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.SwitchCompat
@@ -42,6 +45,21 @@ object SubtitleStyleManager {
 
     /** کلید صف MpvBg: فقط آخرین استایل اجرا می‌شود */
     private const val KEY_STYLE = "sub-style"
+
+    /**
+     * ارتفاع واقعی قابل‌استفاده پنجره، بدون نوارهای سیستم (مثل دکمه هوم/ناوبری).
+     * تا ارتفاع منو با ظاهر یا ناپدید شدن آن‌ها عوض نشود.
+     */
+    private fun availableWindowHeight(context: Context): Int {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            val metrics = wm.currentWindowMetrics
+            val bars = metrics.windowInsets.getInsets(WindowInsets.Type.systemBars())
+            return metrics.bounds.height() - bars.top - bars.bottom
+        }
+        @Suppress("DEPRECATION")
+        return context.resources.displayMetrics.heightPixels
+    }
 
     data class ColorOption(val nameRes: Int, val hex: String)
 
@@ -358,11 +376,11 @@ object SubtitleStyleManager {
                 // همیشه از بالای منو شروع شود (گاهی فوکوس روی اسپینر، اسکرول را پایین می‌برد)
                 scrollSubStyle.post { scrollSubStyle.scrollTo(0, 0) }
                 // در حالت افقی، دیالوگ از صفحه بلندتر می‌شود و دکمه‌ها می‌افتند بیرون؛
-                // ارتفاع پنجره را محدود کن تا دکمه‌ها دیده شوند و محتوا اسکرول بخورد
+                // ارتفاع پنجره را (بدون احتساب دکمه هوم/ناوبری) محدود کن تا دکمه‌ها دیده شوند
                 alertDialog.window?.decorView?.post {
                     val win = alertDialog.window ?: return@post
                     val decorH = win.decorView.height
-                    val maxH = (context.resources.displayMetrics.heightPixels * 0.94).toInt()
+                    val maxH = (availableWindowHeight(context) * 0.94).toInt()
                     if (decorH > maxH) {
                         val lp = win.attributes
                         lp.height = maxH
