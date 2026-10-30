@@ -230,6 +230,7 @@
     <string name="color_orange">Orange</string>
     <string name="color_pink">Pink</string>
     <string name="bg_transparent">No background (transparent)</string>
+    <string name="bg_quarter_25">Light black (25%)</string>
     <string name="bg_semi_50">Semi-transparent black (50%)</string>
     <string name="bg_dark_75">Dark black (75%)</string>
     <string name="bg_solid_100">Solid black (100%)</string>

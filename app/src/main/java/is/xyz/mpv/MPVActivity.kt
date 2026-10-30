@@ -1743,7 +1743,8 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             // اطمینان از لود تنظیمات ذخیره‌شده (فقط بار اول)
             SkipRangeManager.loadFromPrefs(this)
             SkipRangeManager.checkAndSkipIfNeeded(position) { targetSec ->
-                player.timePos = targetSec
+                // seek روی ترد پس‌زمینه تا ترد UI با فراخوانی مسدودکننده mpv قفل نشود
+                MpvBg.post { player.timePos = targetSec }
                 showToast(getString(R.string.skip_toast, Utils.prettyTime(targetSec.roundToInt())), true)
             }
         }

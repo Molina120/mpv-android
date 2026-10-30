@@ -45,6 +45,7 @@ object SubtitleStyleManager {
 
     private val bgOptions = listOf(
         BgOption(R.string.bg_transparent, "transparent"),
+        BgOption(R.string.bg_quarter_25, "quarter_25"),
         BgOption(R.string.bg_semi_50, "semi_50"),
         BgOption(R.string.bg_dark_75, "dark_75"),
         BgOption(R.string.bg_solid_100, "solid_100")
@@ -86,20 +87,18 @@ object SubtitleStyleManager {
     }
 
     private fun applyOsdBoxOptions(bgId: String, isInit: Boolean) {
-        val borderStyle = if (bgId == "transparent") "outline-and-shadow" else "opaque-box"
-        val backColor = when (bgId) {
-            "semi_50" -> "#80000000"
-            "dark_75" -> "#BF000000"
-            "solid_100" -> "#FF000000"
-            else -> "#00000000"
-        }
-
+        // کادر پس‌زمینه به‌صورت یک مستطیل واحد در خودِ اورلی رسم می‌شود
+        // (SubtitleNormalizer)؛ پس استایل OSD همیشه outline-and-shadow می‌ماند
+        // تا libass برای هر خط کادر جداگانه نکشد. bgId دیگر روی OSD اثر ندارد.
         if (isInit) {
-            MPVLib.setOptionString("osd-border-style", borderStyle)
-            MPVLib.setOptionString("osd-back-color", backColor)
+            MPVLib.setOptionString("osd-border-style", "outline-and-shadow")
+            MPVLib.setOptionString("osd-back-color", "#00000000")
         } else {
-            MPVLib.setPropertyString("osd-border-style", borderStyle)
-            MPVLib.setPropertyString("osd-back-color", backColor)
+            // روی ترد پس‌زمینه تا ترد UI قفل نشود
+            MpvBg.post {
+                MPVLib.setPropertyString("osd-border-style", "outline-and-shadow")
+                MPVLib.setPropertyString("osd-back-color", "#00000000")
+            }
         }
     }
 

@@ -55,9 +55,10 @@ object SubtitleNormalizer : MPVLib.EventObserver {
     }
 
     fun refreshCurrentSubtitle() {
-        val current = MPVLib.getPropertyString("sub-text") ?: lastRawSub
-        lastRawSub = current
-        renderSubtitleInternal(current)
+        // عمداً از حافظه داخلی (lastRawSub) استفاده می‌شود تا ترد فراخواننده
+        // (مثلاً UI در دیالوگ شخصی‌سازی) با فراخوانی مسدودکننده mpv قفل نشود؛
+        // lastRawSub با هر تغییر sub-text به‌روز نگه داشته می‌شود.
+        renderSubtitleInternal(lastRawSub)
     }
 
     fun attachToMpv() {
@@ -86,12 +87,14 @@ object SubtitleNormalizer : MPVLib.EventObserver {
         }
 
         if (effectiveText.isBlank()) {
-            MPVLib.command(arrayOf("script-message", "norm-sub", ""))
+            MpvBg.post { MPVLib.command(arrayOf("script-message", "norm-sub", "")) }
             return
         }
 
         val assEvents = formatForAssOverlay(effectiveText)
-        MPVLib.command(arrayOf("script-message", "norm-sub", assEvents))
+        // ارسال به mpv روی ترد پس‌زمینه تا ترد فراخواننده (UI یا event) بلاک نشود؛
+        // صف تک‌تردی ترتیب به‌روزرسانی‌ها را حفظ می‌کند.
+        MpvBg.post { MPVLib.command(arrayOf("script-message", "norm-sub", assEvents)) }
     }
 
     /**
@@ -112,6 +115,7 @@ object SubtitleNormalizer : MPVLib.EventObserver {
         val hasExplicitTopTag = rawText.contains("\\an8") || rawText.contains("\\a6")
         val lines = rawText.split(Regex("\\r?\\n"))
         val normalizedLines = mutableListOf<String>()
+        val measureLines = mutableListOf<String>()
 
         for (rawLine in lines) {
             val cleanLine = rawLine
@@ -121,10 +125,13 @@ object SubtitleNormalizer : MPVLib.EventObserver {
 
             if (cleanLine.isNotEmpty()) {
                 val norm = normalizeSubtitleLine(cleanLine)
-                    .replace("\\", "\\\\")
-                    .replace("{", "\\{")
-                    .replace("}", "\\}")
-                normalizedLines.add(norm)
+                // نسخه بدون اسکیپ برای اندازه‌گیری عرض واقعی متن
+                measureLines.add(norm)
+                normalizedLines.add(
+                    norm.replace("\\", "\\\\")
+                        .replace("{", "\\{")
+                        .replace("}", "\\}")
+                )
             }
         }
 
@@ -133,13 +140,16 @@ object SubtitleNormalizer : MPVLib.EventObserver {
         val joinedText = normalizedLines.joinToString("\\N")
 
         // محاسبهٔ موقعیت عمودی در رزولوشن 1280x720 بر اساس درصد (0 = بالا، 100 = پایین)
-        val alignAndPos = if (hasExplicitTopTag && !styleAssOverride) {
-            "\\an8\\pos(640,50)"
+        val isTopAligned: Boolean
+        val yPos: Int
+        if (hasExplicitTopTag && !styleAssOverride) {
+            isTopAligned = true
+            yPos = 50
         } else {
-            val yPos = (36 + (styleSubPos / 100.0) * (720 - 72)).toInt().coerceIn(36, 684)
-            val alignment = if (styleSubPos < 15) "\\an8" else "\\an2"
-            "$alignment\\pos(640,$yPos)"
+            yPos = (36 + (styleSubPos / 100.0) * (720 - 72)).toInt().coerceIn(36, 684)
+            isTopAligned = styleSubPos < 15
         }
+        val alignAndPos = (if (isTopAligned) "\\an8" else "\\an2") + "\\pos(640,$yPos)"
 
         // رنگ متن اصلی
         val primaryColor = hexToAssBgr(styleColorHex)
@@ -147,34 +157,60 @@ object SubtitleNormalizer : MPVLib.EventObserver {
         // وزن فونت (در libass مقدار 900 باعث اعمال قطعی Synthetic Bold روی فونت می‌شود)
         val boldTag = if (styleBold) "\\b900" else "\\b0"
 
-        // تنظیم حاشیه، سایه و کادر پس‌زمینه
-        val borderAndBgTags = when (styleBgId) {
-            "semi_50" -> {
-                val boxPad = styleBorderSize.coerceAtLeast(3.5)
-                val bordStr = String.format(Locale.US, "%.1f", boxPad)
-                "\\bord$bordStr\\shad0\\3c&H000000&\\3a&H80&\\4c&H000000&\\4a&H80&"
-            }
-            "dark_75" -> {
-                val boxPad = styleBorderSize.coerceAtLeast(3.5)
-                val bordStr = String.format(Locale.US, "%.1f", boxPad)
-                "\\bord$bordStr\\shad0\\3c&H000000&\\3a&H40&\\4c&H000000&\\4a&H40&"
-            }
-            "solid_100" -> {
-                val boxPad = styleBorderSize.coerceAtLeast(3.5)
-                val bordStr = String.format(Locale.US, "%.1f", boxPad)
-                "\\bord$bordStr\\shad0\\3c&H000000&\\3a&H00&\\4c&H000000&\\4a&H00&"
-            }
-            else -> {
-                // حالت شفاف (بدون کادر، دارای حاشیه و سایه متناسب با اسلایدر کاربر)
-                val bordStr = String.format(Locale.US, "%.1f", styleBorderSize)
-                val shadVal = if (styleBorderSize > 0.0) (styleBorderSize * 0.4).coerceIn(0.4, 2.5) else 0.0
-                val shadStr = String.format(Locale.US, "%.1f", shadVal)
-                "\\bord$bordStr\\shad$shadStr\\3c&H000000&\\3a&H00&\\4c&H000000&\\4a&H50&"
-            }
+        // حاشیه و سایه متن؛ کادر جداگانه libass برای هر خط غیرفعال است
+        // (استایل OSD همیشه outline-and-shadow) و کادر یکدست پایین‌تر رسم می‌شود
+        val bordStr = String.format(Locale.US, "%.1f", styleBorderSize)
+        val shadVal = if (styleBorderSize > 0.0) (styleBorderSize * 0.4).coerceIn(0.4, 2.5) else 0.0
+        val shadStr = String.format(Locale.US, "%.1f", shadVal)
+        val textTags = "\\bord$bordStr\\shad$shadStr\\3c&H000000&\\3a&H00&\\4c&H000000&\\4a&H50&"
+
+        val stylePrefix = "{$alignAndPos\\fn${FontInstaller.FONT_FAMILY}\\fs$styleFontSize$boldTag$textTags\\1c$primaryColor\\1a&H00&\\q0}"
+        val textEvent = stylePrefix + joinedText
+
+        // کادر پس‌زمینه یکدست: یک مستطیل واحد پشت کل بلوک چندخطی
+        // (به‌جای کادر جداگانه libass برای هر خط که روی هم می‌افتادند و ناهماهنگ بودند)
+        val bgAlpha: String? = when (styleBgId) {
+            "quarter_25" -> "C0"
+            "semi_50" -> "80"
+            "dark_75" -> "40"
+            "solid_100" -> "00"
+            else -> null
+        }
+        if (bgAlpha == null) return textEvent
+
+        val boxPad = styleBorderSize.coerceAtLeast(3.5)
+        val padH = (boxPad * 2.0).toInt().coerceAtLeast(6)
+        val padV = boxPad.toInt().coerceAtLeast(4)
+
+        val paint = android.graphics.Paint().apply {
+            typeface = FontInstaller.subtitleTypeface
+            textSize = styleFontSize.toFloat()
+        }
+        var maxW = 0f
+        for (ml in measureLines) {
+            val m = ml.replace("\u200F", "").replace("\u202B", "").replace("\u202C", "")
+            if (paint.measureText(m) > maxW) maxW = paint.measureText(m)
+        }
+        val fm = paint.fontMetrics
+        val lineH = (fm.descent - fm.top).coerceAtLeast(styleFontSize * 1.2f)
+        val blockH = lineH * measureLines.size
+
+        val x0 = (640 - maxW / 2 - padH).toInt().coerceIn(8, 1272)
+        val x1 = (640 + maxW / 2 + padH).toInt().coerceIn(8, 1272)
+        val y0: Int
+        val y1: Int
+        if (isTopAligned) {
+            y0 = (yPos - padV).coerceIn(4, 716)
+            y1 = (yPos + blockH + padV).toInt().coerceIn(4, 716)
+        } else {
+            y1 = (yPos + padV).coerceIn(4, 716)
+            y0 = (yPos - blockH - padV).toInt().coerceIn(4, 716)
         }
 
-        val stylePrefix = "{$alignAndPos\\fn${FontInstaller.FONT_FAMILY}\\fs$styleFontSize$boldTag$borderAndBgTags\\1c$primaryColor\\1a&H00&\\q0}"
-        return stylePrefix + joinedText
+        val rectEvent =
+            "{\\an7\\pos(0,0)\\p1\\1c&H000000&\\1a&H$bgAlpha&}m $x0 $y0 l $x1 $y0 l $x1 $y1 l $x0 $y1{\\p0}"
+        // مستطیل اول (پشت) و سپس متن، هر کدام یک ایونت جدا در همان اورلی
+        return rectEvent + "\n" + textEvent
     }
 
     // --- متدهای مربوط به پردازش فایل‌های زیرنویس جداگانه (External SRT) ---
@@ -335,6 +371,31 @@ object SubtitleNormalizer : MPVLib.EventObserver {
             line = "«" + line.substring(0, line.length - 1)
         } else if (line.startsWith("«") && !line.contains("»")) {
             line = line.substring(1) + "»"
+        }
+
+        // ۴-ب. جابه‌جایی علائم نگارشی چسبیده به داخل گیومه‌ها به انتهای خط
+        // («،متن» یا «متن،» -> «متن»،)
+        if (line.startsWith("«") && line.length > 2) {
+            var qEnd = 1
+            while (qEnd < line.length && line[qEnd] in PUNCT_SET) qEnd++
+            if (qEnd > 1) {
+                val innerPunct = line.substring(1, qEnd)
+                val rest = line.substring(qEnd)
+                if (rest.isNotEmpty() && rest.any { it !in PUNCT_SET && it != '«' && it != '»' }) {
+                    line = "«" + rest + innerPunct
+                }
+            }
+        }
+        if (line.endsWith("»") && line.length > 2) {
+            var qStart = line.length - 2
+            while (qStart >= 0 && line[qStart] in PUNCT_SET) qStart--
+            if (qStart < line.length - 2) {
+                val innerPunct = line.substring(qStart + 1, line.length - 1)
+                val rest = line.substring(0, qStart + 1)
+                if (rest.isNotEmpty() && rest.any { it !in PUNCT_SET && it != '«' && it != '»' }) {
+                    line = rest + "»" + innerPunct
+                }
+            }
         }
 
         // ۵. انتقال سایر علائم نگارشی ابتدایی به انتها

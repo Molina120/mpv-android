@@ -208,6 +208,7 @@
     <string name="color_orange">نارنجی</string>
     <string name="color_pink">صورتی</string>
     <string name="bg_transparent">بدون کادر پس‌زمینه (شفاف)</string>
+    <string name="bg_quarter_25">مشکی روشن (۲۵٪)</string>
     <string name="bg_semi_50">مشکی نیمه‌شفاف (۵۰٪)</string>
     <string name="bg_dark_75">مشکی تیره (۷۵٪)</string>
     <string name="bg_solid_100">مشکی کامل (۱۰۰٪)</string>

@@ -11,6 +11,13 @@ object FontInstaller {
     const val FONT_FAMILY = "IRANSansX"
     private const val LUA_SCRIPT_NAME = "sub_normalizer.lua"
 
+    /**
+     * تایپ‌فیس فونت زیرنویس؛ برای اندازه‌گیری عرض واقعی متن
+     * هنگام رسم کادر پس‌زمینه یکدست استفاده می‌شود.
+     */
+    var subtitleTypeface: android.graphics.Typeface? = null
+        private set
+
     private val LUA_OVERLAY_SCRIPT = """
         local ov = nil
         if mp.create_osd_overlay then
@@ -51,6 +58,13 @@ object FontInstaller {
                 if (!dest.exists() || dest.length() != assetSize) {
                     dest.outputStream().use { output -> input.copyTo(output) }
                 }
+            }
+            // بارگذاری تایپ‌فیس برای اندازه‌گیری عرض متن در کادر پس‌زمینه یکدست
+            subtitleTypeface = try {
+                android.graphics.Typeface.createFromFile(dest)
+            } catch (e: Exception) {
+                Log.w(TAG, "failed to load subtitle typeface", e)
+                null
             }
 
             // نصب اسکریپت Lua برای رندر زیرنویس نرمالیزه‌شده با libass
