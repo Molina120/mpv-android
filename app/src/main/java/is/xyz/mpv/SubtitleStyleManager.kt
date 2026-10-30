@@ -1,6 +1,7 @@
 package `is`.xyz.mpv
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.os.Handler
 import android.os.Looper
 import android.preference.PreferenceManager
@@ -10,6 +11,15 @@ import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.SwitchCompat
 
+/*
+ * v18: تغییرات برای رفع گیر کردن دیالوگ
+ *  - هر تغییر فقط یک «استایل» جدید می‌سازد؛ اگر با آخرین استایل اعمال‌شده یکی باشد، هیچ کاری روی mpv نمی‌شود.
+ *  - osd-border-style / osd-back-color فقط وقتی پس‌زمینه عوض شده ست می‌شوند (قبلاً هر تغییری این‌ها را هم ست می‌کرد).
+ *  - باز شدن دیالوگ دیگر اعمال اضافه ندارد (قبلاً applyAndSave و کال‌بک اولیهٔ اسپینرها چند کار سنگین می‌ساختند).
+ *  - کشیدن اسلایدر با حداکثر یک پیش‌نمایش در هر PREVIEW_THROTTLE_MS؛ رها کردن = اعمال فوری.
+ *  - همه‌چیز از طریق MpvBg.postLatest با یک کلید می‌رود، پس فقط آخرین حالت اجرا می‌شود.
+ *  - ریست، اسپینر رنگ/پس‌زمینه را هم به‌روز می‌کند (قبلاً فقط اسلایدرها و سوئیچ‌ها ریست می‌شدند).
+ */
 object SubtitleStyleManager {
     private const val PREF_SUB_SIZE = "custom_sub_font_size"
     private const val PREF_SUB_POS = "custom_sub_pos"
@@ -27,7 +37,11 @@ object SubtitleStyleManager {
     private const val DEFAULT_BG_COLOR = "transparent"
     private const val DEFAULT_ASS_OVERRIDE = true
 
-    private const val APPLY_DEBOUNCE_MS = 80L
+    /** فاصلهٔ پیش‌نمایش زنده هنگام کشیدن اسلایدر (ms). بزرگ‌تر = سبک‌تر روی گوشی‌های ضعیف */
+    private const val PREVIEW_THROTTLE_MS = 250L
+
+    /** کلید صف MpvBg: فقط آخرین استایل اجرا می‌شود */
+    private const val KEY_STYLE = "sub-style"
 
     data class ColorOption(val nameRes: Int, val hex: String)
 
@@ -51,15 +65,44 @@ object SubtitleStyleManager {
         BgOption(R.string.bg_solid_100, "solid_100")
     )
 
+    /** نمای کامل استایل. مقایسهٔ data class یعنی «آیا چیزی عوض شده؟» */
+    private data class Style(
+        val size: Int,
+        val pos: Int,
+        val border: Double,
+        val bold: Boolean,
+        val color: String,
+        val bgId: String,
+        val assOverride: Boolean
+    )
+
+    /** آخرین استایلی که روی mpv اعمال شده. فقط روی ترد MpvBg تغییر می‌کند */
+    @Volatile private var lastApplied: Style? = null
+
+    private fun readStyle(prefs: SharedPreferences) = Style(
+        size = prefs.getInt(PREF_SUB_SIZE, DEFAULT_SIZE).coerceIn(20, 100),
+        pos = prefs.getInt(PREF_SUB_POS, DEFAULT_POS).coerceIn(0, 100),
+        border = prefs.getFloat(PREF_SUB_BORDER, DEFAULT_BORDER.toFloat()).toDouble().coerceIn(0.0, 6.0),
+        bold = prefs.getBoolean(PREF_SUB_BOLD, DEFAULT_BOLD),
+        color = prefs.getString(PREF_SUB_COLOR, DEFAULT_COLOR) ?: DEFAULT_COLOR,
+        bgId = prefs.getString(PREF_SUB_BG_COLOR, DEFAULT_BG_COLOR) ?: DEFAULT_BG_COLOR,
+        assOverride = prefs.getBoolean(PREF_SUB_ASS_OVERRIDE, DEFAULT_ASS_OVERRIDE)
+    )
+
+    private fun saveStyle(prefs: SharedPreferences, s: Style) {
+        prefs.edit()
+            .putInt(PREF_SUB_SIZE, s.size)
+            .putInt(PREF_SUB_POS, s.pos)
+            .putFloat(PREF_SUB_BORDER, s.border.toFloat())
+            .putBoolean(PREF_SUB_BOLD, s.bold)
+            .putString(PREF_SUB_COLOR, s.color)
+            .putString(PREF_SUB_BG_COLOR, s.bgId)
+            .putBoolean(PREF_SUB_ASS_OVERRIDE, s.assOverride)
+            .apply()
+    }
+
     fun applyInitialOptions(context: Context) {
-        val prefs = PreferenceManager.getDefaultSharedPreferences(context)
-        val size = prefs.getInt(PREF_SUB_SIZE, DEFAULT_SIZE).coerceIn(20, 100)
-        val pos = prefs.getInt(PREF_SUB_POS, DEFAULT_POS).coerceIn(0, 100)
-        val border = prefs.getFloat(PREF_SUB_BORDER, DEFAULT_BORDER.toFloat()).toDouble().coerceIn(0.0, 6.0)
-        val bold = prefs.getBoolean(PREF_SUB_BOLD, DEFAULT_BOLD)
-        val color = prefs.getString(PREF_SUB_COLOR, DEFAULT_COLOR) ?: DEFAULT_COLOR
-        val bgId = prefs.getString(PREF_SUB_BG_COLOR, DEFAULT_BG_COLOR) ?: DEFAULT_BG_COLOR
-        val assOverride = prefs.getBoolean(PREF_SUB_ASS_OVERRIDE, DEFAULT_ASS_OVERRIDE)
+        val s = readStyle(PreferenceManager.getDefaultSharedPreferences(context))
 
         // مخفی نگه داشتن لایهٔ خام زیرنویس mpv (چون رندر اصلی در SubtitleNormalizer انجام می‌شود)
         MPVLib.setOptionString("sub-font", FontInstaller.FONT_FAMILY)
@@ -70,24 +113,21 @@ object SubtitleStyleManager {
         MPVLib.setOptionString("sub-ass-override", "strip")
         MPVLib.setOptionString("sub-scale", "0.001")
 
-        // تنظیم استایل کادر پس‌زمینه برای لایهٔ OSD
-        applyOsdBoxOptions(bgId, isInit = true)
-
-        // انتقال تنظیمات استایل به نرمالایزر
+        setOsdBox(s.bgId, isInit = true)
+        lastApplied = s
         SubtitleNormalizer.updateStyleConfig(
-            size = size,
-            pos = pos,
-            border = border,
-            bold = bold,
-            colorHex = color,
-            bgId = bgId,
-            assOverride = assOverride,
+            size = s.size,
+            pos = s.pos,
+            border = s.border,
+            bold = s.bold,
+            colorHex = s.color,
+            bgId = s.bgId,
+            assOverride = s.assOverride,
             refreshNow = false
         )
     }
 
-    private fun applyOsdBoxOptions(bgId: String, isInit: Boolean) {
-        // در معماری کادر per-line در libass، استایل OSD باید opaque-box باشد تا کادر کشیده شود
+    private fun setOsdBox(bgId: String, isInit: Boolean) {
         val borderStyle = if (bgId == "transparent") "outline-and-shadow" else "opaque-box"
         val backColor = when (bgId) {
             "quarter_25" -> "#40000000"
@@ -96,40 +136,39 @@ object SubtitleStyleManager {
             "solid_100" -> "#FF000000"
             else -> "#00000000"
         }
-
         if (isInit) {
             MPVLib.setOptionString("osd-border-style", borderStyle)
             MPVLib.setOptionString("osd-back-color", backColor)
         } else {
-            // روی ترد پس‌زمینه تا ترد UI با فراخوانی مسدودکننده mpv قفل نشود
-            MpvBg.post {
-                MPVLib.setPropertyString("osd-border-style", borderStyle)
-                MPVLib.setPropertyString("osd-back-color", backColor)
-            }
+            MPVLib.setPropertyString("osd-border-style", borderStyle)
+            MPVLib.setPropertyString("osd-back-color", backColor)
         }
     }
 
-    private fun applyLiveProperties(
-        size: Int,
-        pos: Int,
-        border: Double,
-        bold: Boolean,
-        color: String,
-        bgId: String,
-        assOverride: Boolean
-    ) {
-        applyOsdBoxOptions(bgId, isInit = false)
+    /** فقط روی ترد MpvBg اجرا می‌شود */
+    private fun applyOnBg(s: Style) {
+        val prev = lastApplied
+        if (prev == s) return // هیچ تغییری نیست؛ هیچ کار اضافه‌ای روی mpv نمی‌شود
+
+        if (prev == null || prev.bgId != s.bgId) {
+            setOsdBox(s.bgId, isInit = false) // کادر OSD فقط وقتی پس‌زمینه عوض شده
+        }
+        lastApplied = s
 
         SubtitleNormalizer.updateStyleConfig(
-            size = size,
-            pos = pos,
-            border = border,
-            bold = bold,
-            colorHex = color,
-            bgId = bgId,
-            assOverride = assOverride,
-            refreshNow = true
+            size = s.size,
+            pos = s.pos,
+            border = s.border,
+            bold = s.bold,
+            colorHex = s.color,
+            bgId = s.bgId,
+            assOverride = s.assOverride,
+            refreshNow = true // یک رندر؛ داخل صف با کلید norm-sub با رندرهای دیگر یکی می‌شود
         )
+    }
+
+    private fun requestApply(s: Style) {
+        MpvBg.postLatest(KEY_STYLE) { applyOnBg(s) }
     }
 
     fun showStyleDialog(context: Context, onDismiss: () -> Unit) {
@@ -147,16 +186,19 @@ object SubtitleStyleManager {
         val switchSubBold = view.findViewById<SwitchCompat>(R.id.switchSubBold)
         val switchAssOverride = view.findViewById<SwitchCompat>(R.id.switchAssOverride)
 
-        var currentSize = prefs.getInt(PREF_SUB_SIZE, DEFAULT_SIZE).coerceIn(20, 100)
-        var currentPos = prefs.getInt(PREF_SUB_POS, DEFAULT_POS).coerceIn(0, 100)
-        var currentBorder = prefs.getFloat(PREF_SUB_BORDER, DEFAULT_BORDER.toFloat()).toDouble().coerceIn(0.0, 6.0)
-        var currentBold = prefs.getBoolean(PREF_SUB_BOLD, DEFAULT_BOLD)
-        var currentColor = prefs.getString(PREF_SUB_COLOR, DEFAULT_COLOR) ?: DEFAULT_COLOR
-        var currentBgId = prefs.getString(PREF_SUB_BG_COLOR, DEFAULT_BG_COLOR) ?: DEFAULT_BG_COLOR
-        var currentAssOverride = prefs.getBoolean(PREF_SUB_ASS_OVERRIDE, DEFAULT_ASS_OVERRIDE)
+        val saved = readStyle(prefs)
+        var currentSize = saved.size
+        var currentPos = saved.pos
+        var currentBorder = saved.border
+        var currentBold = saved.bold
+        var currentColor = saved.color
+        var currentBgId = saved.bgId
+        var currentAssOverride = saved.assOverride
 
-        // فعال کردن حالت پیش‌نمایش زنده (تا اگر در لحظهٔ باز بودن دیالوگ زیرنویسی نبود، متن نمونه نمایش داده شود)
-        SubtitleNormalizer.setPreviewMode(true)
+        fun snapshot() = Style(
+            currentSize, currentPos, currentBorder, currentBold,
+            currentColor, currentBgId, currentAssOverride
+        )
 
         fun updateLabels() {
             txtSubSize.text = context.getString(R.string.subtitle_size_label, currentSize)
@@ -164,80 +206,73 @@ object SubtitleStyleManager {
             txtSubBorder.text = context.getString(R.string.subtitle_border_label, currentBorder)
         }
 
-        fun applyAndSave() {
-            applyLiveProperties(
-                currentSize, currentPos, currentBorder,
-                currentBold, currentColor, currentBgId, currentAssOverride
-            )
-
-            prefs.edit()
-                .putInt(PREF_SUB_SIZE, currentSize)
-                .putInt(PREF_SUB_POS, currentPos)
-                .putFloat(PREF_SUB_BORDER, currentBorder.toFloat())
-                .putBoolean(PREF_SUB_BOLD, currentBold)
-                .putString(PREF_SUB_COLOR, currentColor)
-                .putString(PREF_SUB_BG_COLOR, currentBgId)
-                .putBoolean(PREF_SUB_ASS_OVERRIDE, currentAssOverride)
-                .apply()
-        }
-
         val handler = Handler(Looper.getMainLooper())
-        var pendingApply: Runnable? = null
-
-        fun scheduleApply() {
-            pendingApply?.let { handler.removeCallbacks(it) }
-            pendingApply = Runnable { applyAndSave() }
-            handler.postDelayed(pendingApply!!, APPLY_DEBOUNCE_MS)
+        var previewQueued = false
+        val previewRunnable = Runnable {
+            previewQueued = false
+            requestApply(snapshot())
         }
 
-        fun flushApply() {
-            pendingApply?.let {
-                handler.removeCallbacks(it)
-                pendingApply = null
-                applyAndSave()
+        // هنگام کشیدن اسلایدر: حداکثر یک پیش‌نمایش در هر PREVIEW_THROTTLE_MS
+        fun schedulePreview() {
+            if (!previewQueued) {
+                previewQueued = true
+                handler.postDelayed(previewRunnable, PREVIEW_THROTTLE_MS)
             }
         }
 
-        fun syncSeekBars() {
+        // تغییر قطعی (رها کردن اسلایدر، سوئیچ، اسپینر، ریست، بستن): ذخیره + اعمال
+        fun commitNow() {
+            if (previewQueued) {
+                handler.removeCallbacks(previewRunnable)
+                previewQueued = false
+            }
+            val s = snapshot()
+            saveStyle(prefs, s)
+            requestApply(s)
+        }
+
+        // همگام‌سازی کنترل‌ها با متغیرهای فعلی (اسپینرها باید adapter داشته باشند)
+        fun syncControls() {
             seekSubSize.progress = (currentSize - 20).coerceIn(0, 80)
             seekSubPos.progress = currentPos.coerceIn(0, 100)
             seekSubBorder.progress = (currentBorder * 10).toInt().coerceIn(0, 60)
             switchSubBold.isChecked = currentBold
             switchAssOverride.isChecked = currentAssOverride
+            spinnerSubColor.setSelection(
+                textColors.indexOfFirst { it.hex.equals(currentColor, true) }.coerceAtLeast(0)
+            )
+            spinnerSubBgColor.setSelection(
+                bgOptions.indexOfFirst { it.id == currentBgId }.coerceAtLeast(0)
+            )
         }
 
-        syncSeekBars()
-        updateLabels()
+        // پیش‌نمایش زنده فعال؛ این تنها رندر باز شدن دیالوگ است (اعمال اضافه‌ای نیست)
+        SubtitleNormalizer.setPreviewMode(true)
 
         spinnerSubColor.adapter = ArrayAdapter(
             context,
             android.R.layout.simple_spinner_dropdown_item,
             textColors.map { context.getString(it.nameRes) }
         )
-        spinnerSubColor.setSelection(
-            textColors.indexOfFirst { it.hex.equals(currentColor, true) }.coerceAtLeast(0)
-        )
-
         spinnerSubBgColor.adapter = ArrayAdapter(
             context,
             android.R.layout.simple_spinner_dropdown_item,
             bgOptions.map { context.getString(it.nameRes) }
         )
-        spinnerSubBgColor.setSelection(
-            bgOptions.indexOfFirst { it.id == currentBgId }.coerceAtLeast(0)
-        )
 
-        applyAndSave()
+        updateLabels()
+        syncControls() // کال‌بک اولیهٔ اسپینرها بعد از layout می‌آید و با گارد «مقدار یکسان» نادیده گرفته می‌شود
 
         seekSubSize.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 if (!fromUser) return
                 currentSize = 20 + progress
                 updateLabels()
-                scheduleApply()
+                schedulePreview()
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) { flushApply() }
+            override fun onStopTrackingTouch(seekBar: SeekBar?) { commitNow() }
         })
 
         seekSubPos.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -245,10 +280,10 @@ object SubtitleStyleManager {
                 if (!fromUser) return
                 currentPos = progress
                 updateLabels()
-                scheduleApply()
+                schedulePreview()
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) { flushApply() }
+            override fun onStopTrackingTouch(seekBar: SeekBar?) { commitNow() }
         })
 
         seekSubBorder.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -256,38 +291,43 @@ object SubtitleStyleManager {
                 if (!fromUser) return
                 currentBorder = progress / 10.0
                 updateLabels()
-                scheduleApply()
+                schedulePreview()
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) { flushApply() }
+            override fun onStopTrackingTouch(seekBar: SeekBar?) { commitNow() }
         })
 
         spinnerSubColor.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
-                currentColor = textColors[position].hex
-                updateLabels()
-                applyAndSave()
+                val hex = textColors[position].hex
+                // اندروید هنگام اولین layout همین کال‌بک را با مقدار فعلی صدا می‌زند؛ آن را نادیده بگیر
+                if (hex.equals(currentColor, true)) return
+                currentColor = hex
+                commitNow()
             }
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
         spinnerSubBgColor.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
-                currentBgId = bgOptions[position].id
-                updateLabels()
-                applyAndSave()
+                val id2 = bgOptions[position].id
+                if (id2 == currentBgId) return
+                currentBgId = id2
+                commitNow()
             }
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
         switchSubBold.setOnCheckedChangeListener { _, isChecked ->
+            if (isChecked == currentBold) return@setOnCheckedChangeListener
             currentBold = isChecked
-            applyAndSave()
+            commitNow()
         }
 
         switchAssOverride.setOnCheckedChangeListener { _, isChecked ->
+            if (isChecked == currentAssOverride) return@setOnCheckedChangeListener
             currentAssOverride = isChecked
-            applyAndSave()
+            commitNow()
         }
 
         AlertDialog.Builder(context)
@@ -302,12 +342,12 @@ object SubtitleStyleManager {
                 currentColor = DEFAULT_COLOR
                 currentBgId = DEFAULT_BG_COLOR
                 currentAssOverride = DEFAULT_ASS_OVERRIDE
-                syncSeekBars()
+                syncControls()
                 updateLabels()
-                applyAndSave()
+                commitNow()
             }
             .setOnDismissListener {
-                flushApply()
+                commitNow()
                 SubtitleNormalizer.setPreviewMode(false)
                 onDismiss()
             }

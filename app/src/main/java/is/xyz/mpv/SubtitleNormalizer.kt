@@ -91,14 +91,14 @@ object SubtitleNormalizer : MPVLib.EventObserver {
         }
 
         if (effectiveText.isBlank()) {
-            MpvBg.post { MPVLib.command(arrayOf("script-message", "norm-sub", "")) }
+            MpvBg.postLatest("norm-sub") { MPVLib.command(arrayOf("script-message", "norm-sub", "")) }
             return
         }
 
         val assEvents = formatForAssOverlay(effectiveText)
         // ارسال به mpv روی ترد پس‌زمینه تا ترد فراخواننده (UI یا event) بلاک نشود؛
-        // صف تک‌تردی ترتیب به‌روزرسانی‌ها را حفظ می‌کند.
-        MpvBg.post { MPVLib.command(arrayOf("script-message", "norm-sub", assEvents)) }
+        // با کلید norm-sub فقط آخرین رندر اجرا می‌شود و صف انباشته نمی‌شود.
+        MpvBg.postLatest("norm-sub") { MPVLib.command(arrayOf("script-message", "norm-sub", assEvents)) }
     }
 
     /**
@@ -116,7 +116,7 @@ object SubtitleNormalizer : MPVLib.EventObserver {
     }
 
     private fun boxAlphaFor(bgId: String): String? = when (bgId) {
-        "quarter_25" -> "C0"
+        "quarter_25" -> "BF"
         "semi_50" -> "80"
         "dark_75" -> "40"
         "solid_100" -> "00"
@@ -188,7 +188,7 @@ object SubtitleNormalizer : MPVLib.EventObserver {
             "quarter_25" -> {
                 val boxPad = styleBorderSize.coerceAtLeast(3.5)
                 val bordStr = String.format(Locale.US, "%.1f", boxPad)
-                "\\bord$bordStr\\shad0\\3c&H000000&\\3a&HC0&\\4c&H000000&\\4a&HC0&"
+                "\\bord$bordStr\\shad0\\3c&H000000&\\3a&HBF&\\4c&H000000&\\4a&HBF&"
             }
             "semi_50" -> {
                 val boxPad = styleBorderSize.coerceAtLeast(3.5)
