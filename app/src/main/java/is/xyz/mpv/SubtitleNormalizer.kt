@@ -108,12 +108,12 @@ object SubtitleNormalizer {
         if (core.isBlank()) return line
 
         val normalized = normalizeSubtitleLine(core)
-        return "\u200F\u202B" + startTags + normalized.removePrefix("\u200F\u202B") + endTags
+        return startTags + normalized + endTags
     }
 
     fun normalizeSubtitleLine(input: String?): String {
         if (input.isNullOrEmpty()) return input ?: ""
-        if (input.startsWith("\u200F\u202B")) return input
+        if (input.startsWith("\u200F")) return input
 
         var line = input.trim()
         if (line.isEmpty()) return line
@@ -128,7 +128,7 @@ object SubtitleNormalizer {
         }
         if (!hasRtl) return line
 
-        // ۱. حل مشکل خط تیره دیالوگ در انتهای خطوط (مثل "- و...نوچ، فقط آبجو")
+        // ۱. انتقال خط تیره دیالوگ که در انتهای خط افتاده به ابتدای خط (تصویر ۲۳)
         var isDialogue = false
         val trailingDashRegex = Regex("[\\s\\u00A0\\u200C]*[-–—]+[\\s\\u00A0\\u200C]*$")
         if (trailingDashRegex.containsMatchIn(line)) {
@@ -139,13 +139,7 @@ object SubtitleNormalizer {
             line = line.substring(1).trimStart()
         }
 
-        // ۲. حل مشکل سه‌نقطه و علائم در ابتدای خطوط (تصاویر ۲۱ و ۲۲)
-        if (line.startsWith("...") || line.startsWith("…")) {
-            val prefix = if (line.startsWith("...")) "..." else "…"
-            line = line.substring(prefix.length).trimStart() + prefix
-        }
-
-        // ۳. حل مشکل ترکیب نقطه با گیومه مثل .«من هولوگرام نیستم» (تصویر ۲۴)
+        // ۲. اصلاح نقطه یا علائم قبل از گیومه (تصویر ۲۴)
         if (Regex("^[.!?؟،:;؛]+«").containsMatchIn(line)) {
             val pMatch = Regex("^[.!?؟،:;؛]+").find(line)
             if (pMatch != null) {
@@ -154,22 +148,26 @@ object SubtitleNormalizer {
             }
         }
 
-        // ۴. حل مشکل گیومه‌های نامتوازن در شکست خطوط
+        // ۳. جفت‌سازی گیومه‌های شکسته در شکست خطوط
         if (line.endsWith("»") && !line.contains("«")) {
             line = "«" + line.substring(0, line.length - 1)
         } else if (line.startsWith("«") && !line.contains("»")) {
             line = line.substring(1) + "»"
         }
 
-        // ۵. انتقال سایر علائم نگارشی ابتدایی به انتها
-        line = moveLeadingPunctToEnd(line)
+        // ۴. انتقال علائم نگارشی ابتدای خط (به جز سه‌نقطه پیوستگی تصاویر ۲۱ و ۲۲) به انتهای خط
+        val isEllipsisStart = line.startsWith("...") || line.startsWith("…")
+        if (!isEllipsisStart) {
+            line = moveLeadingPunctToEnd(line)
+        }
 
-        // ۶. برگرداندن خط تیره دیالوگ به ابتدای صحیح جمله
+        // ۵. اضافه کردن خط تیره در ابتدای صحیح دیالوگ همراه با RLM
         if (isDialogue) {
             line = "- $line"
         }
 
-        return "\u200F\u202B$line"
+        // استفاده از \u200F برای ایجاد راست‌به‌چپ قطعی بدون خرابی شکست خط
+        return "\u200F$line"
     }
 
     private fun moveLeadingPunctToEnd(s: String): String {
