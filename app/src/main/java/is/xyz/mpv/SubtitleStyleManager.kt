@@ -380,7 +380,7 @@ object SubtitleStyleManager {
                 alertDialog.window?.decorView?.post {
                     val win = alertDialog.window ?: return@post
                     val decorH = win.decorView.height
-                    val maxH = (availableWindowHeight(context) * 0.94).toInt()
+                    val maxH = (availableWindowHeight(context) * 0.88).toInt()
                     if (decorH > maxH) {
                         val lp = win.attributes
                         lp.height = maxH
