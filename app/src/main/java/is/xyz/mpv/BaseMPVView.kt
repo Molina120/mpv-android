@@ -48,6 +48,7 @@ abstract class BaseMPVView(context: Context, attrs: AttributeSet) : SurfaceView(
         // Disable surface callbacks to avoid using uninitialized mpv state
         holder.removeCallback(this)
 
+        SubtitleNormalizer.detachFromMpv()
         MPVLib.destroy()
     }
 

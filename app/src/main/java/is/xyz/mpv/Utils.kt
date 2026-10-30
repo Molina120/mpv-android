@@ -60,10 +60,9 @@ internal object Utils {
     /** Write the 'fonts.conf' for fontconfig. */
     /** Write the 'fonts.conf' for fontconfig. */
     private fun writeFontsConf(context: Context, configFile: File) {
-        val customFontsDir = "${context.filesDir.path}/fonts"
         val parts = mutableListOf(
             "<fontconfig>",
-            "<dir>$customFontsDir</dir>",
+            "<dir>${context.filesDir.path}/fonts</dir>",
             // Android system fonts reside here
             "<dir>/system/fonts/</dir>",
             "<dir>/product/fonts/</dir>",
@@ -76,11 +75,11 @@ internal object Utils {
             "<prefer>",
             "<family>IRANSansX</family>",
             "<family>Roboto</family>",
-            "<family>Noto Sans</family>",
+            "<family>Noto Sans</family>", // other languages
             "</prefer>",
             "</alias>",
             "<alias><family>monospace</family>",
-            "<prefer><family>IRANSansX</family><family>Droid Sans Mono</family></prefer>",
+            "<prefer><family>Droid Sans Mono</family></prefer>",
             "</alias>",
             "</fontconfig>"
         )

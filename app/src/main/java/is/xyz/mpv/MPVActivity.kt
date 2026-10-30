@@ -366,7 +366,6 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
 
         // Suppress any further callbacks
         activityIsForeground = false
-        isSoftsubExtracted = false
 
         if (becomingNoisyReceiverRegistered) {
             unregisterReceiver(becomingNoisyReceiver)
@@ -1181,11 +1180,11 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
 
             for (suburi in subList) {
                 val subfile = resolveUri(suburi) ?: continue
+                val normalizedSub = SubtitleNormalizer.processSubtitlePath(this, subfile)
                 val flag = if (subsToEnable.any { it == suburi }) "select" else "auto"
 
-                val finalSubFile = SubtitleNormalizer.processSubtitlePath(applicationContext, subfile)
-                Log.v(TAG, "Adding normalized subtitles from intent extras: $finalSubFile")
-                onloadCommands.add(arrayOf("sub-add", finalSubFile, flag))
+                Log.v(TAG, "Adding subtitles from intent extras: $normalizedSub")
+                onloadCommands.add(arrayOf("sub-add", normalizedSub, flag))
             }
         }
         extras.getInt("position", 0).let {
@@ -1409,20 +1408,17 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         fun addExternalThing(cmd: String, result: Int, data: Intent?) {
             if (result != RESULT_OK)
                 return
+            // file picker may return a content URI or a bare file path
             val path = data!!.getStringExtra("path") ?: data.data?.toString() ?: return
             val path2 = if (path.startsWith("content://"))
                 translateContentUri(Uri.parse(path))
             else
                 path
-
-            val finalPath = if (cmd == "sub-add") {
-                SubtitleNormalizer.processSubtitlePath(applicationContext, path2)
-            } else {
+            val finalPath = if (cmd == "sub-add")
+                SubtitleNormalizer.processSubtitlePath(this, path2)
+            else
                 path2
-            }
-            // استفاده از پرچم select برای فعال‌سازی فوری زیرنویس
-            val flag = if (cmd == "sub-add") "select" else "cached"
-            MPVLib.command(arrayOf(cmd, finalPath, flag))
+            MPVLib.command(arrayOf(cmd, finalPath, "cached"))
         }
 
         /******/
@@ -2052,12 +2048,9 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
      * رهگیری خودکار زیرنویس‌ها: هر زیرنویس خارجی را نرمالایز و جایگزین می‌کند.
      * هنگام MPV_EVENT_FILE_LOADED فراخوانی می‌شود.
      */
-    private var isSoftsubExtracted = false
-
     private fun autoNormalizeSubtitles() {
         try {
             val count = MPVLib.getPropertyInt("track-list/count") ?: 0
-            var hasExternalSub = false
 
             for (i in 0 until count) {
                 val type = MPVLib.getPropertyString("track-list/$i/type") ?: continue
@@ -2069,7 +2062,6 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
 
                 // بررسی زیرنویس‌های خارجی
                 if (!extFile.isNullOrEmpty()) {
-                    hasExternalSub = true
                     if (!extFile.contains("norm_sub_") && !extFile.contains("softsub_norm_")) {
                         val normPath = SubtitleNormalizer.processSubtitlePath(applicationContext, extFile)
                         if (normPath != extFile) {
@@ -2080,21 +2072,6 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
                         }
                     }
                 }
-            }
-
-            // اگر هیچ زیرنویس خارجی وجود نداشت، سافت‌ساب داخلی ویدیو را استخراج و جایگزین کن
-            if (!hasExternalSub && !isSoftsubExtracted) {
-                val currentPath = MPVLib.getPropertyString("path") ?: return
-                isSoftsubExtracted = true
-
-                Thread {
-                    val extractedFile = EmbeddedSubExtractor.extractAndNormalize(applicationContext, currentPath)
-                    if (extractedFile != null && extractedFile.exists()) {
-                        runOnUiThread {
-                            MPVLib.command(arrayOf("sub-add", extractedFile.absolutePath, "select"))
-                        }
-                    }
-                }.start()
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to auto-normalize subtitles", e)

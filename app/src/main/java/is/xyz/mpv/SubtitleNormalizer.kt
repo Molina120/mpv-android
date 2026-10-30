@@ -3,13 +3,81 @@ package `is`.xyz.mpv
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import `is`.xyz.mpv.MPVLib.MpvEvent
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
 
-object SubtitleNormalizer {
+object SubtitleNormalizer : MPVLib.EventObserver {
 
+    private const val TAG = "SubtitleNormalizer"
     private val PUNCT_SET = setOf('.', '!', '?', '؟', '،', ':', ';', '؛')
+
+    private var lastRawSub: String? = null
+
+    fun attachToMpv() {
+        MPVLib.removeObserver(this)
+        MPVLib.addObserver(this)
+    }
+
+    fun detachFromMpv() {
+        MPVLib.removeObserver(this)
+        lastRawSub = null
+    }
+
+    /**
+     * رندر زیرنویس نرمالیزه‌شده (سافت‌ساب و اکسترنال) در لحظه از طریق موتور libass داخلی mpv
+     */
+    fun updateLiveSubtitle(rawSubText: String?) {
+        val text = rawSubText ?: ""
+        if (text == lastRawSub) return
+        lastRawSub = text
+
+        if (text.isBlank()) {
+            MPVLib.command(arrayOf("script-message", "norm-sub", ""))
+            return
+        }
+
+        val assEvents = formatForAssOverlay(text)
+        MPVLib.command(arrayOf("script-message", "norm-sub", assEvents))
+    }
+
+    private fun formatForAssOverlay(rawText: String): String {
+        val isTopAligned = rawText.contains("\\an8") || rawText.contains("\\a6")
+        val lines = rawText.split(Regex("\\r?\\n"))
+        val normalizedLines = mutableListOf<String>()
+
+        for (rawLine in lines) {
+            // حذف تگ‌های احتمالی HTML یا ASS از متن خام برای نرمالیزه شدن دقیق علائم
+            val cleanLine = rawLine
+                .replace(Regex("\\{[^}]*\\}"), "")
+                .replace(Regex("<[^>]+>"), "")
+                .trim()
+
+            if (cleanLine.isNotEmpty()) {
+                val norm = normalizeSubtitleLine(cleanLine)
+                    .replace("\\", "\\\\")
+                    .replace("{", "\\{")
+                    .replace("}", "\\}")
+                normalizedLines.add(norm)
+            }
+        }
+
+        if (normalizedLines.isEmpty()) return ""
+
+        val joinedText = normalizedLines.joinToString("\\N")
+        val alignAndPos = if (isTopAligned) {
+            "\\an8\\pos(640,55)"
+        } else {
+            "\\an2\\pos(640,680)"
+        }
+
+        // استایل استاندارد libass منطبق با فونت IRANSansX
+        val stylePrefix = "{$alignAndPos\\fnIRANSansX\\fs42\\b0\\bord2.2\\shad1.2\\1c&HFFFFFF&\\3c&H000000&\\4c&H000000&\\q0}"
+        return stylePrefix + joinedText
+    }
+
+    // --- متدهای مربوط به پردازش فایل‌های زیرنویس جداگانه (External SRT) ---
 
     fun processSubtitlePath(context: Context, pathOrUri: String): String {
         try {
@@ -30,7 +98,7 @@ object SubtitleNormalizer {
             cacheFile.writeText(fixedContent, Charsets.UTF_8)
             return cacheFile.absolutePath
         } catch (e: Exception) {
-            Log.e("SubtitleNormalizer", "Error processing subtitle", e)
+            Log.e(TAG, "Error processing subtitle", e)
             return pathOrUri
         }
     }
@@ -108,14 +176,22 @@ object SubtitleNormalizer {
         if (core.isBlank()) return line
 
         val normalized = normalizeSubtitleLine(core)
-        return "\u200F\u202B" + startTags + normalized.removePrefix("\u200F\u202B") + endTags
+            .removePrefix("\u200F\u202B")
+            .removeSuffix("\u202C\u200F")
+        return "\u200F\u202B" + startTags + normalized + endTags + "\u202C\u200F"
     }
 
     fun normalizeSubtitleLine(input: String?): String {
         if (input.isNullOrEmpty()) return input ?: ""
         if (input.startsWith("\u200F\u202B")) return input
 
-        var line = input.trim()
+        var line = input
+            .replace("\u200E", "")
+            .replace("\u200F", "")
+            .replace("\u202A", "")
+            .replace("\u202B", "")
+            .replace("\u202C", "")
+            .trim()
         if (line.isEmpty()) return line
 
         var hasRtl = false
@@ -128,7 +204,7 @@ object SubtitleNormalizer {
         }
         if (!hasRtl) return line
 
-        // ۱. حل مشکل خط تیره دیالوگ در انتهای خطوط (مثل "- و...نوچ، فقط آبجو")
+        // ۱. حل مشکل خط تیره دیالوگ در انتها یا ابتدای خطوط
         var isDialogue = false
         val trailingDashRegex = Regex("[\\s\\u00A0\\u200C]*[-–—]+[\\s\\u00A0\\u200C]*$")
         if (trailingDashRegex.containsMatchIn(line)) {
@@ -139,13 +215,13 @@ object SubtitleNormalizer {
             line = line.substring(1).trimStart()
         }
 
-        // ۲. حل مشکل سه‌نقطه و علائم در ابتدای خطوط (تصاویر ۲۱ و ۲۲)
+        // ۲. حل مشکل سه‌نقطه در ابتدای خطوط
         if (line.startsWith("...") || line.startsWith("…")) {
             val prefix = if (line.startsWith("...")) "..." else "…"
             line = line.substring(prefix.length).trimStart() + prefix
         }
 
-        // ۳. حل مشکل ترکیب نقطه با گیومه مثل .«من هولوگرام نیستم» (تصویر ۲۴)
+        // ۳. حل مشکل ترکیب نقطه با گیومه مثل .«من هولوگرام نیستم»
         if (Regex("^[.!?؟،:;؛]+«").containsMatchIn(line)) {
             val pMatch = Regex("^[.!?؟،:;؛]+").find(line)
             if (pMatch != null) {
@@ -169,7 +245,8 @@ object SubtitleNormalizer {
             line = "- $line"
         }
 
-        return "\u200F\u202B$line"
+        // قفل کردن هر دو سمت خط با کاراکترهای قوی RTL برای جلوگیری از پرش علائم در libass
+        return "\u200F\u202B$line\u202C\u200F"
     }
 
     private fun moveLeadingPunctToEnd(s: String): String {
@@ -184,5 +261,41 @@ object SubtitleNormalizer {
         val punct = s.substring(0, pCount)
         val rest = s.substring(pCount).trimStart()
         return "$rest$punct"
+    }
+
+    // --- EventObserver Callbacks ---
+
+    override fun eventProperty(property: String) {
+        if (property == "sub-text" || property == "sid") {
+            val current = MPVLib.getPropertyString("sub-text") ?: ""
+            updateLiveSubtitle(current)
+        }
+    }
+
+    override fun eventProperty(property: String, value: String) {
+        if (property == "sub-text") {
+            updateLiveSubtitle(value)
+        } else if (property == "sid") {
+            val current = MPVLib.getPropertyString("sub-text") ?: ""
+            updateLiveSubtitle(current)
+        }
+    }
+
+    override fun eventProperty(property: String, value: Long) {}
+    override fun eventProperty(property: String, value: Boolean) {}
+    override fun eventProperty(property: String, value: Double) {}
+
+    override fun event(eventId: Int) {
+        when (eventId) {
+            MpvEvent.MPV_EVENT_START_FILE,
+            MpvEvent.MPV_EVENT_END_FILE -> {
+                updateLiveSubtitle("")
+            }
+            MpvEvent.MPV_EVENT_SEEK,
+            MpvEvent.MPV_EVENT_PLAYBACK_RESTART -> {
+                val current = MPVLib.getPropertyString("sub-text") ?: ""
+                updateLiveSubtitle(current)
+            }
+        }
     }
 }
