@@ -486,6 +486,8 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
 
         activityIsForeground = false
         eventUiHandler.removeCallbacksAndMessages(null)
+        // ذخیره وضعیت تماشا حتماً قبل از stop شدن پلیر (بعدش time-pos دیگر خوانا نیست)
+        saveWatchState()
         if (isFinishing) {
             savePosition()
             // tell mpv to shut down so that any other property changes or such are ignored,
@@ -498,7 +500,6 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             updateMediaSession()
         }
         writeSettings()
-        saveWatchState()
         super.onPause()
 
         didResumeBackgroundPlayback = shouldBackground

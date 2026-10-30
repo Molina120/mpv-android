@@ -282,4 +282,8 @@
     <string name="resume_message">Continue from %1$s?</string>
     <string name="resume_continue">Continue</string>
     <string name="resume_from_start">From start</string>
+
+    <!-- Browser search -->
+    <string name="search">Search</string>
+    <string name="search_hint">Search videos…</string>
 </resources>

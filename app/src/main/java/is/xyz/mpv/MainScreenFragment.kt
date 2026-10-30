@@ -8,6 +8,7 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -16,6 +17,7 @@ import android.util.Log
 import android.util.LruCache
 import android.util.Size
 import android.view.LayoutInflater
+import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
@@ -24,6 +26,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.widget.SearchView
 import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
@@ -44,16 +47,22 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
     private lateinit var permissionLauncher: ActivityResultLauncher<String>
 
     private val scanner = Executors.newSingleThreadExecutor()
-    private val thumbExecutor = Executors.newFixedThreadPool(2)
+    private val thumbExecutor = Executors.newFixedThreadPool(3)
 
     /** وضعیت تماشا (به سبک MX Player) */
     private var newVideoIds: Set<Long> = emptySet()
     private var lastPlayedId: Long? = null
 
-    /** کش بندانگشتی‌ها: حداکثر ~8 مگابایت */
-    private val thumbCache = object : LruCache<Long, Bitmap>(8 * 1024) {
+    /** متن جستجو در مرورگر */
+    private var searchQuery: String = ""
+
+    /** کش بندانگشتی‌ها: حداکثر ~16 مگابایت */
+    private val thumbCache = object : LruCache<Long, Bitmap>(16 * 1024) {
         override fun sizeOf(key: Long, value: Bitmap): Int = value.byteCount / 1024
     }
+
+    /** ویدیوهایی که ساخت بندانگشتی‌شان در این نشست ناموفق بود (تلاش مجدد بی‌فایده) */
+    private val thumbFailed = mutableSetOf<Long>()
 
     private var folders: List<VideoScanner.Folder> = emptyList()
     private var openFolder: VideoScanner.Folder? = null
@@ -185,6 +194,26 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
 
         binding.toolbar.title = getString(R.string.browser_folders)
         binding.toolbar.inflateMenu(R.menu.browser_menu)
+        // جستجو در مرورگر
+        val searchItem = binding.toolbar.menu.findItem(R.id.menu_search)
+        val searchView = searchItem.actionView as SearchView
+        searchView.queryHint = getString(R.string.search_hint)
+        searchView.setOnQueryTextListener(object : SearchView.OnQueryTextListener {
+            override fun onQueryTextSubmit(query: String?): Boolean = true
+            override fun onQueryTextChange(newText: String?): Boolean {
+                searchQuery = newText?.trim() ?: ""
+                refreshDisplay()
+                return true
+            }
+        })
+        searchItem.setOnActionExpandListener(object : MenuItem.OnActionExpandListener {
+            override fun onMenuItemActionExpand(item: MenuItem): Boolean = true
+            override fun onMenuItemActionCollapse(item: MenuItem): Boolean {
+                searchQuery = ""
+                refreshDisplay()
+                return true
+            }
+        })
         binding.toolbar.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 R.id.menu_refresh -> { loadVideos(); true }
@@ -339,37 +368,67 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
     /** لود تنبل بندانگشتی با کش؛ فقط اگر ردیف هنوز همان ویدیو را نشان می‌دهد ست می‌شود */
     private fun loadThumb(video: VideoScanner.Video, imageView: ImageView) {
         imageView.tag = video.id
+        imageView.setImageDrawable(null)
         thumbCache.get(video.id)?.let {
-            imageView.background = null
             imageView.setImageBitmap(it)
             return
         }
-        imageView.setImageDrawable(null)
-        imageView.setBackgroundColor(0xFF2C2F34.toInt())
+        if (video.id in thumbFailed) return
         val appCtx = requireContext().applicationContext
         thumbExecutor.execute {
             try {
-                val bmp: Bitmap? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    appCtx.contentResolver.loadThumbnail(video.uri, Size(192, 144), null)
-                } else {
-                    @Suppress("DEPRECATION")
-                    MediaStore.Video.Thumbnails.getThumbnail(
-                        appCtx.contentResolver, video.id,
-                        MediaStore.Video.Thumbnails.MINI_KIND, null
-                    )
+                var bmp: Bitmap? = try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        appCtx.contentResolver.loadThumbnail(video.uri, Size(480, 320), null)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        MediaStore.Video.Thumbnails.getThumbnail(
+                            appCtx.contentResolver, video.id,
+                            MediaStore.Video.Thumbnails.MINI_KIND, null
+                        )
+                    }
+                } catch (e: Exception) {
+                    null
                 }
+                // راه دوم: فریم مستقیم از خود ویدیو (وقتی loadThumbnail ناکام می‌ماند)
+                if (bmp == null) bmp = retrieverFrame(appCtx, video)
                 if (bmp != null) {
                     thumbCache.put(video.id, bmp)
                     imageView.post {
-                        if (imageView.tag == video.id) {
-                            imageView.background = null
-                            imageView.setImageBitmap(bmp)
-                        }
+                        if (imageView.tag == video.id) imageView.setImageBitmap(bmp)
                     }
+                } else {
+                    synchronized(thumbFailed) { thumbFailed.add(video.id) }
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "thumbnail failed: ${video.name}")
+                synchronized(thumbFailed) { thumbFailed.add(video.id) }
             }
+        }
+    }
+
+    /** گرفتن یک فریم از ویدیو با MediaMetadataRetriever (جایگزین loadThumbnail) */
+    private fun retrieverFrame(appCtx: android.content.Context, video: VideoScanner.Video): Bitmap? {
+        var r: MediaMetadataRetriever? = null
+        return try {
+            r = MediaMetadataRetriever()
+            r.setDataSource(appCtx, video.uri)
+            val atUs = if (video.durationMs > 0)
+                (video.durationMs * 100L).coerceAtLeast(500_000L) // حدود ۱۰٪ ویدیو
+            else 1_000_000L
+            val frame = r.getFrameAtTime(atUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                ?: r.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            // کوچک‌سازی به سایز بندانگشتی برای مصرف حافظه کمتر
+            if (frame != null && frame.width > 480) {
+                val h = (480f * frame.height / frame.width).toInt().coerceAtLeast(1)
+                val scaled = Bitmap.createScaledBitmap(frame, 480, h, true)
+                if (scaled !== frame) frame.recycle()
+                scaled
+            } else frame
+        } catch (e: Exception) {
+            null
+        } finally {
+            try { r?.release() } catch (e: Exception) { }
         }
     }
 
@@ -409,7 +468,9 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         binding.toolbar.subtitle = null
         binding.toolbar.navigationIcon = null
         val adapter = binding.videoList.adapter as BrowserAdapter
+        val q = searchQuery
         val list = sortedFolders()
+            .filter { q.isEmpty() || it.name.contains(q, ignoreCase = true) }
         adapter.items = list.map { BrowserItem.FolderRow(it) }
         binding.emptyView.isVisible = list.isEmpty()
         binding.videoList.scrollToPosition(0)
@@ -424,7 +485,9 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         binding.toolbar.navigationIcon =
             ContextCompat.getDrawable(requireContext(), R.drawable.ic_back_24dp)
         val adapter = binding.videoList.adapter as BrowserAdapter
+        val q = searchQuery
         val list = sortedVideos(folder)
+            .filter { q.isEmpty() || it.name.contains(q, ignoreCase = true) }
         adapter.items = list.map { BrowserItem.VideoRow(it) }
         binding.emptyView.isVisible = list.isEmpty()
         binding.videoList.scrollToPosition(0)

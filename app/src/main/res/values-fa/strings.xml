@@ -260,4 +260,8 @@
     <string name="resume_message">از %1$s ادامه بده؟</string>
     <string name="resume_continue">ادامه</string>
     <string name="resume_from_start">از اول</string>
+
+    <!-- Browser search -->
+    <string name="search">جستجو</string>
+    <string name="search_hint">جستجوی ویدیو…</string>
 </resources>

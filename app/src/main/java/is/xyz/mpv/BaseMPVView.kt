@@ -26,6 +26,9 @@ abstract class BaseMPVView(context: Context, attrs: AttributeSet) : SurfaceView(
         FontInstaller.install(context)
         initOptions()
 
+        // IranSans mod: capture mpv version info for About screen (avoids a 2nd mpv instance)
+        MpvVersionCache.registerOnce()
+
         MPVLib.init()
 
         /* set hardcoded options */

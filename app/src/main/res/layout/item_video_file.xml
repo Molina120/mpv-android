@@ -15,7 +15,8 @@
             android:id="@+id/videoThumb"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:background="#2c2f34"
+            android:background="@drawable/thumb_rounded"
+            android:clipToOutline="true"
             android:contentDescription="@string/browser_video"
             android:scaleType="centerCrop" />
 

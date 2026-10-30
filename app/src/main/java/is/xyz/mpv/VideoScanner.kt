@@ -33,31 +33,28 @@ object VideoScanner {
     private val SUB_REGEX = Regex("(^|[^a-z0-9])(subbed|softsub|hardsub|subtitles|subtitle|srt)([^a-z0-9]|$)")
     private val DUB_REGEX = Regex("(^|[^a-z0-9])(dubbed|duble|dub)([^a-z0-9]|$)")
 
-    private fun detectFlags(fileName: String, dataPath: String?): Pair<Boolean, Boolean> {
+    private fun detectNameFlags(fileName: String): Pair<Boolean, Boolean> {
         val lower = fileName.lowercase()
-        var sub = SUB_REGEX.containsMatchIn(lower) || lower.contains("زیرنویس")
+        val sub = SUB_REGEX.containsMatchIn(lower) || lower.contains("زیرنویس")
         val dub = DUB_REGEX.containsMatchIn(lower) || lower.contains("دوبله")
-        // فایل زیرنویس هم‌نام کنار فیلم (movie.srt / movie.fa.srt / ...)
-        if (!sub && !dataPath.isNullOrEmpty()) sub = hasSiblingSubtitleFile(dataPath, fileName)
         return sub to dub
     }
 
-    private fun hasSiblingSubtitleFile(dataPath: String, fileName: String): Boolean {
-        return try {
-            val dir = java.io.File(dataPath).parentFile ?: return false
-            val base = fileName.substringBeforeLast('.').lowercase()
-            val exts = arrayOf(".srt", ".ass", ".ssa", ".vtt")
-            dir.listFiles { _, name ->
-                val ln = name.lowercase()
-                exts.any { ln.endsWith(it) } && ln.startsWith(base)
-            }?.isNotEmpty() == true
-        } catch (e: Exception) {
-            false
-        }
-    }
+    private class RawVideo(
+        val id: Long,
+        val uri: Uri,
+        val name: String,
+        val durationMs: Long,
+        val sizeBytes: Long,
+        val dateModifiedSec: Long,
+        val folder: String,
+        val dataPath: String?,
+        val nameSub: Boolean,
+        val nameDub: Boolean
+    )
 
     fun scan(context: Context): List<Folder> {
-        val videos = mutableListOf<Video>()
+        val raw = mutableListOf<RawVideo>()
         val collection = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
         val projection = arrayOf(
             MediaStore.Video.Media._ID,
@@ -86,9 +83,9 @@ object VideoScanner {
                     val dateMod = try { c.getLong(dateCol) } catch (e: Exception) { 0L }
                     val dataPath = try { c.getString(dataCol) } catch (e: Exception) { null }
                     val bucket = c.getString(bucketCol).takeUnless { it.isNullOrEmpty() } ?: "-"
-                    val (hasSub, hasDub) = detectFlags(name, dataPath)
-                    videos.add(
-                        Video(
+                    val (nameSub, nameDub) = detectNameFlags(name)
+                    raw.add(
+                        RawVideo(
                             id = id,
                             uri = ContentUris.withAppendedId(collection, id),
                             name = name,
@@ -96,14 +93,50 @@ object VideoScanner {
                             sizeBytes = size,
                             dateModifiedSec = dateMod,
                             folder = bucket,
-                            hasSubtitle = hasSub,
-                            hasDubbedAudio = hasDub
+                            dataPath = dataPath,
+                            nameSub = nameSub,
+                            nameDub = nameDub
                         )
                     )
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "MediaStore scan failed", e)
+        }
+        // فایل‌های زیرنویس هر پوشه فقط یک‌بار خوانده می‌شوند (نه به‌ازای هر ویدیو)
+        val subFilesByDir = mutableMapOf<String, Set<String>>()
+        fun subtitleFilesOf(dirPath: String): Set<String> =
+            subFilesByDir.getOrPut(dirPath) {
+                try {
+                    java.io.File(dirPath).listFiles { _, n ->
+                        val ln = n.lowercase()
+                        ln.endsWith(".srt") || ln.endsWith(".ass") ||
+                                ln.endsWith(".ssa") || ln.endsWith(".vtt")
+                    }?.map { it.name.lowercase() }?.toSet() ?: emptySet()
+                } catch (e: Exception) {
+                    emptySet()
+                }
+            }
+        val videos = raw.map { r ->
+            // فایل زیرنویس هم‌نام کنار فیلم (movie.srt / movie.fa.srt / ...)
+            val siblingSub = !r.nameSub && r.dataPath?.let { dp ->
+                val dir = try { java.io.File(dp).parent } catch (e: Exception) { null }
+                if (dir == null) false else {
+                    val base = r.name.substringBeforeLast('.').lowercase()
+                    subtitleFilesOf(dir).any { it.startsWith(base) }
+                }
+            } == true
+            Video(
+                id = r.id,
+                uri = r.uri,
+                name = r.name,
+                durationMs = r.durationMs,
+                sizeBytes = r.sizeBytes,
+                dateModifiedSec = r.dateModifiedSec,
+                folder = r.folder,
+                hasSubtitle = r.nameSub || siblingSub,
+                hasDubbedAudio = r.nameDub
+            )
         }
         return videos.groupBy { it.folder }
             .map { (name, list) -> Folder(name, list) }

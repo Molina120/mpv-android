@@ -29,7 +29,8 @@ internal class MPVView(context: Context, attrs: AttributeSet) : BaseMPVView(cont
         else
             "gpu")
 
-        // hwdec
+        // hwdec: حالت auto یعنی اول همه دیکدرهای سخت‌افزاری موجود امتحان می‌شوند
+        // و اگر هیچ‌کدام جواب نداد خودکار به نرم‌افزاری برمی‌گردد
         val hwdec = if (sharedPreferences.getBoolean("hardware_decoding", true))
             HWDECS
         else
@@ -404,6 +405,6 @@ internal class MPVView(context: Context, attrs: AttributeSet) : BaseMPVView(cont
         private const val TAG = "mpv"
 
         // mpv option `hwdec` is set to this
-        private const val HWDECS = "mediacodec,mediacodec-copy"
+        private const val HWDECS = "auto"
     }
 }

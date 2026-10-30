@@ -10,6 +10,7 @@ import com.google.android.material.color.DynamicColors
 import `is`.xyz.mpv.BuildConfig
 import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.MPVLib.MpvLogLevel
+import `is`.xyz.mpv.MpvVersionCache
 import `is`.xyz.mpv.R
 import `is`.xyz.mpv.databinding.ActivityAboutBinding
 
@@ -35,6 +36,14 @@ class AboutActivity : AppCompatActivity(), MPVLib.LogObserver {
         }
 
         logs = "mpv-android ${BuildConfig.VERSION_NAME} / ${BuildConfig.VERSION_CODE} (${BuildConfig.BUILD_TYPE})\n"
+
+        // اگر قبلاً در این فرایند پلیر اجرا شده، اطلاعات نسخه کش شده و نیازی به
+        // ساخت نمونه دوم mpv نیست (ساخت دوباره بعد از destroy کرش می‌داد)
+        val cached = MpvVersionCache.info
+        if (cached != null) {
+            binding.logs.text = logs + cached
+            return
+        }
 
         // create mpv context to capture version info from log
         MPVLib.create(this)
