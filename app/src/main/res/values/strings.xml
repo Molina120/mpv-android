@@ -249,4 +249,17 @@
     <!-- Top menu buttons (IranSans mod) -->
     <string name="menu_subtitle_style">Subtitle style</string>
     <string name="menu_skip_ranges">Auto-skip ranges</string>
+
+    <!-- Video browser (MX-style main screen) -->
+    <string name="browser_folders">Folders</string>
+    <string name="browser_no_videos">No videos found on this device</string>
+    <string name="browser_permission_rationale">To find and list your videos, mpv needs access to media files on this device.</string>
+    <string name="browser_grant_access">Allow access</string>
+    <string name="browser_refresh">Refresh</string>
+    <string name="browser_folder">Folder</string>
+    <string name="browser_video">Video</string>
+    <plurals name="browser_videos_count">
+        <item quantity="one">%d video</item>
+        <item quantity="other">%d videos</item>
+    </plurals>
 </resources>

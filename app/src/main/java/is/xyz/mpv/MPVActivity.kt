@@ -21,6 +21,7 @@ import android.graphics.drawable.Icon
 import android.util.Log
 import android.media.AudioManager
 import android.net.Uri
+import android.provider.MediaStore
 import android.os.*
 import android.preference.PreferenceManager.getDefaultSharedPreferences
 import android.support.v4.media.session.MediaSessionCompat
@@ -1645,16 +1646,42 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         intent.putExtra("title", title)
         intent.putExtra("allow_document", true)
         skip?.let { intent.putExtra("skip", it) }
-        // start file picker at directory of current file
-        val path = MPVLib.getPropertyString("path") ?: ""
-        if (path.startsWith('/'))
-            intent.putExtra("default_path", File(path).parent)
+        // start file picker at the folder of the currently playing video
+        // (subtitles/dubs usually sit next to the movie)
+        pickerStartDir()?.let { intent.putExtra("default_path", it) }
 
         activityResultCallbacks[requestCode] = callback
         startActivityForResult(intent, requestCode)
     }
     private fun openFilePickerFor(requestCode: Int, @StringRes titleRes: Int, callback: ActivityResultCallback) {
         openFilePickerFor(requestCode, getString(titleRes), null, callback)
+    }
+
+    /**
+     * پوشه شروع فایل‌پیکر: پوشه همان ویدیوی در حال پخش.
+     * اگر ویدیو با content URI باز شده باشد، پوشه واقعی آن از MediaStore خوانده می‌شود.
+     */
+    private fun pickerStartDir(): String? {
+        val path = try { MPVLib.getPropertyString("path") } catch (e: Exception) { null }
+            ?: return null
+        if (path.startsWith("/"))
+            return File(path).parent
+        if (path.startsWith("content://")) {
+            try {
+                contentResolver.query(
+                    Uri.parse(path), arrayOf(MediaStore.Video.Media.DATA), null, null, null
+                )?.use { c ->
+                    if (c.moveToFirst()) {
+                        val data = c.getString(0)
+                        if (!data.isNullOrEmpty())
+                            return File(data).parent
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "pickerStartDir: MediaStore query failed: $e")
+            }
+        }
+        return null
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {

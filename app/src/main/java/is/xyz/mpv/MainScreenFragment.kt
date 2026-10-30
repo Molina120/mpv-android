@@ -1,46 +1,76 @@
 package `is`.xyz.mpv
 
-import `is`.xyz.filepicker.DocumentPickerFragment
 import `is`.xyz.mpv.preferences.PreferenceActivity
 import `is`.xyz.mpv.databinding.FragmentMainScreenBinding
+import android.Manifest
 import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
-import android.content.res.Configuration
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
-import android.preference.PreferenceManager
 import android.util.Log
+import android.view.LayoutInflater
 import android.view.View
+import android.view.ViewGroup
+import android.widget.TextView
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
+import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import java.util.concurrent.Executors
 
+/**
+ * صفحه اصلی: مرورگر ویدیوها به سبک MX Player — پوشه‌ها و ویدیوها
+ * به‌صورت خودکار از MediaStore پیدا و مرتب نمایش داده می‌شوند.
+ */
 class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
     private lateinit var binding: FragmentMainScreenBinding
 
     private lateinit var documentTreeOpener: ActivityResultLauncher<Uri?>
     private lateinit var filePickerLauncher: ActivityResultLauncher<Intent>
     private lateinit var playerLauncher: ActivityResultLauncher<Intent>
+    private lateinit var permissionLauncher: ActivityResultLauncher<String>
 
-    private var firstRun = false
-    private var returningFromPlayer = false
+    private val scanner = Executors.newSingleThreadExecutor()
 
-    private var prev = ""
-    private var prevData: String? = null
+    private var folders: List<VideoScanner.Folder> = emptyList()
+    private var openFolder: VideoScanner.Folder? = null
+    private var loadedOnce = false
+
     private var lastPath = ""
+
+    private val backCallback = object : OnBackPressedCallback(false) {
+        override fun handleOnBackPressed() {
+            if (openFolder != null) showFolders() else {
+                isEnabled = false
+                requireActivity().onBackPressed()
+            }
+        }
+    }
+
+    private val videoPermission: String
+        get() = if (Build.VERSION.SDK_INT >= 33)
+            Manifest.permission.READ_MEDIA_VIDEO
+        else
+            Manifest.permission.READ_EXTERNAL_STORAGE
+
+    private fun hasPermission(): Boolean =
+        ContextCompat.checkSelfPermission(requireContext(), videoPermission) ==
+                PackageManager.PERMISSION_GRANTED
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        firstRun = savedInstanceState == null
 
         documentTreeOpener = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) {
             it?.let { root ->
                 requireContext().contentResolver.takePersistableUriPermission(
                     root, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                saveChoice("doc", root.toString())
 
                 val i = Intent(context, FilePickerActivity::class.java)
                 i.putExtra("skip", FilePickerActivity.DOC_PICKER)
@@ -71,10 +101,18 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             }
         }
         playerLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-            // we don't care about the result but remember that we've been here
-            returningFromPlayer = true
             Log.v(TAG, "returned from player ($it)")
         }
+        permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) loadVideos() else showPermissionView()
+        }
+    }
+
+    override fun onCreateView(
+        inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?
+    ): View {
+        // binding دستی چون لی‌اوت جدید دیگر شامل ویوهای قبلی نیست
+        return inflater.inflate(R.layout.fragment_main_screen, container, false)
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
@@ -82,128 +120,188 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
 
         Utils.handleInsetsAsPadding(binding.root)
 
-        binding.docBtn.setOnClickListener {
-            try {
-                documentTreeOpener.launch(null)
-            } catch (e: ActivityNotFoundException) {
-                // Android TV doesn't come with a document picker and certain versions just throw
-                // instead of handling this gracefully
-                binding.docBtn.isEnabled = false
-            }
-        }
-        binding.urlBtn.setOnClickListener {
-            saveChoice("url")
-            val helper = Utils.OpenUrlDialog(requireContext())
-            with (helper) {
-                builder.setPositiveButton(R.string.dialog_ok) { _, _ ->
-                    playFile(helper.text)
+        binding.videoList.layoutManager = LinearLayoutManager(requireContext())
+        binding.videoList.adapter = BrowserAdapter()
+
+        binding.toolbar.title = getString(R.string.browser_folders)
+        binding.toolbar.inflateMenu(R.menu.browser_menu)
+        binding.toolbar.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                R.id.menu_refresh -> { loadVideos(); true }
+                R.id.menu_open_file -> { openLegacyFilePicker(); true }
+                R.id.menu_open_folder -> { openDocumentTree(); true }
+                R.id.menu_open_url -> { openUrlDialog(); true }
+                R.id.menu_settings -> {
+                    startActivity(Intent(context, PreferenceActivity::class.java)); true
                 }
-                builder.setNegativeButton(R.string.dialog_cancel) { dialog, _ -> dialog.cancel() }
-                create().show()
+                else -> false
             }
         }
-        binding.filepickerBtn.setOnClickListener {
-            saveChoice("file")
-            val i = Intent(context, FilePickerActivity::class.java)
-            i.putExtra("skip", FilePickerActivity.FILE_PICKER)
-            i.putExtra("allow_dir", true)
-            if (lastPath != "")
-                i.putExtra("default_path", lastPath)
-            filePickerLauncher.launch(i)
-        }
-        binding.settingsBtn.setOnClickListener {
-            saveChoice("") // will reset
-            startActivity(Intent(context, PreferenceActivity::class.java))
+        binding.toolbar.setNavigationOnClickListener { showFolders() }
+
+        binding.grantBtn.setOnClickListener {
+            permissionLauncher.launch(videoPermission)
         }
 
-        if (BuildConfig.DEBUG) {
-            binding.settingsBtn.setOnLongClickListener { showDebugMenu(); true }
-        }
+        requireActivity().onBackPressedDispatcher.addCallback(viewLifecycleOwner, backCallback)
 
-        onConfigurationChanged(view.resources.configuration)
-    }
-
-    private fun showDebugMenu() {
-        assert(BuildConfig.DEBUG)
-        val context = requireContext()
-        with (AlertDialog.Builder(context)) {
-            setItems(DEBUG_ACTIVITIES) { dialog, idx ->
-                dialog.dismiss()
-                val intent = Intent(Intent.ACTION_MAIN)
-                intent.setClassName(context, "${context.packageName}.${DEBUG_ACTIVITIES[idx]}")
-                startActivity(intent)
-            }
-            create().show()
-        }
-    }
-
-    override fun onConfigurationChanged(newConfig: Configuration) {
-        super.onConfigurationChanged(newConfig)
-        // phone screens are too small to show the action buttons alongside the logo
-        if (!Utils.isXLargeTablet(requireContext())) {
-            binding.logo.isVisible = newConfig.orientation != Configuration.ORIENTATION_LANDSCAPE
-        }
+        if (hasPermission()) loadVideos() else showPermissionView()
     }
 
     override fun onResume() {
         super.onResume()
-        if (firstRun) {
-            restoreChoice()
-        } else if (returningFromPlayer) {
-            restoreChoice(prev, prevData)
-        }
-        firstRun = false
-        returningFromPlayer = false
-    }
-
-    private fun saveChoice(type: String, data: String? = null) {
-        if (prev != type)
-            lastPath = ""
-        prev = type
-        prevData = data
-
-        if (!binding.switch1.isChecked)
-            return
-        binding.switch1.isChecked = false
-        with (PreferenceManager.getDefaultSharedPreferences(requireContext()).edit()) {
-            putString("MainScreenFragment_remember", type)
-            if (data == null)
-                remove("MainScreenFragment_remember_data")
-            else
-                putString("MainScreenFragment_remember_data", data)
-            commit()
+        // اولین نمایش: اگر مجوز هست ولی هنوز لود نشده، لود کن
+        if (hasPermission() && !loadedOnce &&
+            binding.permissionView.isVisible) {
+            loadVideos()
         }
     }
 
-    private fun restoreChoice() {
-        with (PreferenceManager.getDefaultSharedPreferences(requireContext())) {
-            restoreChoice(
-                getString("MainScreenFragment_remember", "") ?: "",
-                getString("MainScreenFragment_remember_data", "")
-            )
-        }
+    // ---------- مرورگر ----------
+
+    private sealed class BrowserItem {
+        data class FolderRow(val folder: VideoScanner.Folder) : BrowserItem()
+        data class VideoRow(val video: VideoScanner.Video) : BrowserItem()
     }
 
-    private fun restoreChoice(type: String, data: String?) {
-        when (type) {
-            "doc" -> {
-                val uri = Uri.parse(data)
-                // check that we can still access the folder
-                if (!DocumentPickerFragment.isTreeUsable(requireContext(), uri))
-                    return
-
-                saveChoice(type, data)
-
-                val i = Intent(context, FilePickerActivity::class.java)
-                i.putExtra("skip", FilePickerActivity.DOC_PICKER)
-                i.putExtra("root", uri.toString())
-                i.putExtra("allow_dir", true)
-                if (lastPath != "")
-                    i.putExtra("default_path", lastPath)
-                filePickerLauncher.launch(i)
+    private inner class BrowserAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+        var items: List<BrowserItem> = emptyList()
+            set(value) {
+                field = value
+                notifyDataSetChanged()
             }
-            "url" -> binding.urlBtn.callOnClick()
-            "file" -> binding.filepickerBtn.callOnClick()
+
+        override fun getItemViewType(position: Int): Int =
+            if (items[position] is BrowserItem.FolderRow) 0 else 1
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
+            val inflater = LayoutInflater.from(parent.context)
+            return if (viewType == 0) {
+                val v = inflater.inflate(R.layout.item_video_folder, parent, false)
+                FolderVH(v)
+            } else {
+                val v = inflater.inflate(R.layout.item_video_file, parent, false)
+                VideoVH(v)
+            }
+        }
+
+        override fun getItemCount(): Int = items.size
+
+        override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+            when (val item = items[position]) {
+                is BrowserItem.FolderRow -> (holder as FolderVH).bind(item.folder)
+                is BrowserItem.VideoRow -> (holder as VideoVH).bind(item.video)
+            }
+        }
+
+        inner class FolderVH(v: View) : RecyclerView.ViewHolder(v) {
+            private val name: TextView = v.findViewById(R.id.folderName)
+            private val count: TextView = v.findViewById(R.id.folderCount)
+            private val size: TextView = v.findViewById(R.id.folderSize)
+            fun bind(folder: VideoScanner.Folder) {
+                name.text = folder.name
+                count.text = resources.getQuantityString(
+                    R.plurals.browser_videos_count, folder.videos.size, folder.videos.size)
+                size.text = VideoScanner.formatSize(itemView.context, folder.totalSize)
+                itemView.setOnClickListener { showVideos(folder) }
+            }
+        }
+
+        inner class VideoVH(v: View) : RecyclerView.ViewHolder(v) {
+            private val name: TextView = v.findViewById(R.id.videoName)
+            private val meta: TextView = v.findViewById(R.id.videoMeta)
+            fun bind(video: VideoScanner.Video) {
+                name.text = video.name
+                meta.text = "${VideoScanner.formatDuration(video.durationMs)} • " +
+                        VideoScanner.formatSize(itemView.context, video.sizeBytes)
+                itemView.setOnClickListener { playFile(video.uri.toString()) }
+            }
+        }
+    }
+
+    private fun loadVideos() {
+        binding.permissionView.isVisible = false
+        binding.emptyView.isVisible = false
+        binding.loading.isVisible = true
+        scanner.execute {
+            val result = VideoScanner.scan(requireContext())
+            if (!isAdded) return@execute
+            requireActivity().runOnUiThread {
+                if (!isAdded) return@runOnUiThread
+                folders = result
+                loadedOnce = true
+                binding.loading.isVisible = false
+                if (openFolder != null) {
+                    // اگر پوشه‌ای باز است، همان را تازه کن
+                    val updated = folders.find { it.name == openFolder!!.name }
+                    if (updated != null) showVideos(updated) else showFolders()
+                } else {
+                    showFolders()
+                }
+            }
+        }
+    }
+
+    private fun showFolders() {
+        openFolder = null
+        backCallback.isEnabled = false
+        binding.toolbar.title = getString(R.string.browser_folders)
+        binding.toolbar.subtitle = null
+        binding.toolbar.navigationIcon = null
+        val adapter = binding.videoList.adapter as BrowserAdapter
+        adapter.items = folders.map { BrowserItem.FolderRow(it) }
+        binding.emptyView.isVisible = folders.isEmpty()
+        binding.videoList.scrollToPosition(0)
+    }
+
+    private fun showVideos(folder: VideoScanner.Folder) {
+        openFolder = folder
+        backCallback.isEnabled = true
+        binding.toolbar.title = folder.name
+        binding.toolbar.subtitle = resources.getQuantityString(
+            R.plurals.browser_videos_count, folder.videos.size, folder.videos.size)
+        binding.toolbar.navigationIcon =
+            ContextCompat.getDrawable(requireContext(), R.drawable.ic_back_24dp)
+        val adapter = binding.videoList.adapter as BrowserAdapter
+        adapter.items = folder.videos.map { BrowserItem.VideoRow(it) }
+        binding.emptyView.isVisible = folder.videos.isEmpty()
+        binding.videoList.scrollToPosition(0)
+    }
+
+    private fun showPermissionView() {
+        binding.loading.isVisible = false
+        binding.emptyView.isVisible = false
+        binding.permissionView.isVisible = true
+    }
+
+    // ---------- اکشن‌های قبلی (منوی تولبار) ----------
+
+    private fun openLegacyFilePicker() {
+        val i = Intent(context, FilePickerActivity::class.java)
+        i.putExtra("skip", FilePickerActivity.FILE_PICKER)
+        i.putExtra("allow_dir", true)
+        if (lastPath != "")
+            i.putExtra("default_path", lastPath)
+        filePickerLauncher.launch(i)
+    }
+
+    private fun openDocumentTree() {
+        try {
+            documentTreeOpener.launch(null)
+        } catch (e: ActivityNotFoundException) {
+            // Android TV doesn't come with a document picker and certain versions just throw
+            // instead of handling this gracefully
+        }
+    }
+
+    private fun openUrlDialog() {
+        val helper = Utils.OpenUrlDialog(requireContext())
+        with (helper) {
+            builder.setPositiveButton(R.string.dialog_ok) { _, _ ->
+                playFile(helper.text)
+            }
+            builder.setNegativeButton(R.string.dialog_cancel) { dialog, _ -> dialog.cancel() }
+            create().show()
         }
     }
 
@@ -220,13 +318,12 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         playerLauncher.launch(i)
     }
 
-    companion object {
-        private const val TAG = "mpv"
+    override fun onDestroy() {
+        scanner.shutdown()
+        super.onDestroy()
+    }
 
-        // list of debug or testing activities that can be launched
-        private val DEBUG_ACTIVITIES = arrayOf(
-            "IntentTestActivity",
-            "CodecInfoActivity"
-        )
+    companion object {
+        private const val TAG = "MainScreenFragment"
     }
 }

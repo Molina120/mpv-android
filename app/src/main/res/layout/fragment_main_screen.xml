@@ -1,85 +1,80 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/browserRoot"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:gravity="center"
-    android:orientation="vertical"
-    android:padding="24dp">
+    android:background="#101010"
+    android:orientation="vertical">
 
-    <ImageView
-        android:id="@+id/logo"
+    <androidx.appcompat.widget.Toolbar
+        android:id="@+id/toolbar"
+        android:layout_width="match_parent"
+        android:layout_height="?attr/actionBarSize"
+        android:background="#1b1b1b"
+        app:popupTheme="@style/ThemeOverlay.AppCompat.Dark"
+        app:titleTextColor="#ffffff"
+        app:subtitleTextColor="#9aa0a6" />
+
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="3"
-        android:contentDescription="@string/mpv_activity"
-        app:srcCompat="@drawable/mpv_logo" />
+        android:layout_weight="1">
 
-    <!-- FIXME this could look better -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="2"
-        android:gravity="center"
-        android:orientation="horizontal">
-
-        <Button
-            android:id="@+id/docBtn"
-            style="@style/Widget.AppCompat.Button.Colored"
-            android:layout_width="0dp"
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/videoList"
+            android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:drawableTop="@drawable/ic_file_open_48dp"
-            android:text="@string/action_open_doc_tree"
-            android:textColor="@android:color/primary_text_dark" />
+            android:clipToPadding="false"
+            android:paddingBottom="8dp" />
 
-        <Button
-            android:id="@+id/urlBtn"
-            style="@style/Widget.AppCompat.Button.Colored"
-            android:layout_width="0dp"
+        <ProgressBar
+            android:id="@+id/loading"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:visibility="gone" />
+
+        <LinearLayout
+            android:id="@+id/emptyView"
+            android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:drawableTop="@drawable/ic_link_48dp"
-            android:text="@string/action_open_url"
-            android:textColor="@android:color/primary_text_dark" />
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="32dp"
+            android:visibility="gone">
 
-    </LinearLayout>
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/browser_no_videos"
+                android:textColor="#9aa0a6"
+                android:textSize="16sp" />
+        </LinearLayout>
 
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="2"
-        android:gravity="center"
-        android:orientation="horizontal">
-
-        <Button
-            android:id="@+id/filepickerBtn"
-            style="@style/Widget.AppCompat.Button.Colored"
-            android:layout_width="0dp"
+        <LinearLayout
+            android:id="@+id/permissionView"
+            android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:drawableTop="@drawable/ic_folder_white_48dp"
-            android:text="@string/file_picker_old"
-            android:textColor="@android:color/primary_text_dark" />
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="32dp"
+            android:visibility="gone">
 
-        <Button
-            android:id="@+id/settingsBtn"
-            style="@style/Widget.AppCompat.Button.Colored"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:drawableTop="@drawable/ic_settings_black_48dp"
-            android:text="@string/action_settings"
-            android:textColor="@android:color/primary_text_dark" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:text="@string/browser_permission_rationale"
+                android:textColor="#9aa0a6"
+                android:textSize="15sp" />
 
-    </LinearLayout>
-
-    <androidx.appcompat.widget.SwitchCompat
-        android:id="@+id/switch1"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:padding="16dp"
-        android:text="@string/option_remember_choice"
-        app:showText="false" />
-
+            <Button
+                android:id="@+id/grantBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="@string/browser_grant_access" />
+        </LinearLayout>
+    </FrameLayout>
 </LinearLayout>

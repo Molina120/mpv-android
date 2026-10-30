@@ -227,4 +227,17 @@
     <!-- Top menu buttons (IranSans mod) -->
     <string name="menu_subtitle_style">شخصی‌سازی زیرنویس</string>
     <string name="menu_skip_ranges">پرش خودکار زمانی</string>
+
+    <!-- Video browser (MX-style main screen) -->
+    <string name="browser_folders">پوشه‌ها</string>
+    <string name="browser_no_videos">ویدیویی در این دستگاه پیدا نشد</string>
+    <string name="browser_permission_rationale">برای پیدا کردن و نمایش ویدیوها، mpv به دسترسی فایل‌های رسانه‌ای دستگاه نیاز دارد.</string>
+    <string name="browser_grant_access">دادن دسترسی</string>
+    <string name="browser_refresh">تازه‌سازی</string>
+    <string name="browser_folder">پوشه</string>
+    <string name="browser_video">ویدیو</string>
+    <plurals name="browser_videos_count">
+        <item quantity="one">%d ویدیو</item>
+        <item quantity="other">%d ویدیو</item>
+    </plurals>
 </resources>
