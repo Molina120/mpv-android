@@ -25,7 +25,7 @@ object SkipRangeManager {
     private const val PREF_SKIP_RANGES_TEXT = "skip_ranges_text"
 
     @Volatile
-    var isEnabled: Boolean = true
+    var isEnabled: Boolean = false
     @Volatile
     var mode: SkipMode = SkipMode.SKIP_SPECIFIED_RANGES
     var rawInputText: String = ""
@@ -43,7 +43,7 @@ object SkipRangeManager {
         prefsLoaded = true
         try {
             val prefs = PreferenceManager.getDefaultSharedPreferences(context)
-            isEnabled = prefs.getBoolean(PREF_SKIP_ENABLED, true)
+            isEnabled = prefs.getBoolean(PREF_SKIP_ENABLED, false)
             val modeName = prefs.getString(PREF_SKIP_MODE, SkipMode.SKIP_SPECIFIED_RANGES.name)
             mode = try {
                 SkipMode.valueOf(modeName ?: SkipMode.SKIP_SPECIFIED_RANGES.name)
