@@ -127,8 +127,11 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             override fun onAnimationCancel(animation: Animator) { hasStarted = false }
 
             override fun onAnimationEnd(animation: Animator) {
-                if (hasStarted)
+                if (hasStarted) {
+                    btnSelected = -1
+                    updateSelectedDpadButton()
                     hideControls()
+                }
                 hasStarted = false
             }
         }
@@ -767,7 +770,7 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
     private fun controlsShouldBeVisible(): Boolean {
         if (lockedUI)
             return false
-        return useAudioUI || btnSelected != -1 || userIsOperatingSeekbar
+        return useAudioUI || userIsOperatingSeekbar
     }
 
     /** Make controls visible, also controls the timeout until they fade. */
@@ -975,6 +978,9 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
                 if (ev.action == KeyEvent.ACTION_DOWN) {
                     btnSelected = (btnSelected + 1) % dpadButtons().count()
                     updateSelectedDpadButton()
+                    // ریست تایمر محو شدن
+                    fadeHandler.removeCallbacks(fadeRunnable)
+                    fadeHandler.postDelayed(fadeRunnable, CONTROLS_DISPLAY_TIMEOUT)
                 }
                 return true
             }
@@ -983,6 +989,9 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
                     val count = dpadButtons().count()
                     btnSelected = (count + btnSelected - 1) % count
                     updateSelectedDpadButton()
+                    // ریست تایمر محو شدن
+                    fadeHandler.removeCallbacks(fadeRunnable)
+                    fadeHandler.postDelayed(fadeRunnable, CONTROLS_DISPLAY_TIMEOUT)
                 }
                 return true
             }
@@ -1050,6 +1059,14 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
     private fun onBackPressedImpl() {
         if (lockedUI)
             return showUnlockControls()
+
+        // اگر منوی ابزارها باز است، فقط آن را ببند نه خروج از فیلم
+        if (binding.controls.visibility == View.VISIBLE) {
+            btnSelected = -1
+            updateSelectedDpadButton()
+            hideControlsFade()
+            return
+        }
 
         val notYetPlayed = psc.playlistCount - psc.playlistPos - 1
         if (notYetPlayed <= 0 || !playlistExitWarning) {
