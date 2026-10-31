@@ -746,7 +746,6 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
     private fun decodeFrameWithCpuMediaCodec(appCtx: Context, video: VideoScanner.Video): Bitmap? {
         val extractor = MediaExtractor()
         var pfd: android.os.ParcelFileDescriptor? = null
-        var codec: MediaCodec? = null
 
         return try {
             var sourceSet = false
@@ -793,58 +792,64 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                 else -> 0L
             }
 
-            // تبدیل Dolby Vision به HEVC و ساخت فرمت تمیز بدون تگ‌های پروفایل HDR10+ که باعث خطای configure می‌شوند
             val targetMime = if (origMime == "video/dolby-vision") {
                 MediaFormat.MIMETYPE_VIDEO_HEVC
             } else {
                 origMime
             }
 
-            val cleanFormat = MediaFormat.createVideoFormat(targetMime, width, height)
-            for (csdKey in arrayOf("csd-0", "csd-1", "csd-2")) {
-                if (origFormat.containsKey(csdKey)) {
-                    origFormat.getByteBuffer(csdKey)?.let { buf ->
-                        cleanFormat.setByteBuffer(csdKey, buf.duplicate())
+            val cleanFormat = MediaFormat.createVideoFormat(targetMime, width, height).apply {
+                // جلوگیری از کرش readSampleData روی فریم‌های سنگین 4K HDR10+
+                setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, maxOf(width * height, 2 * 1024 * 1024))
+                setInteger(
+                    MediaFormat.KEY_COLOR_FORMAT,
+                    android.media.MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible
+                )
+                for (csdKey in arrayOf("csd-0", "csd-1", "csd-2")) {
+                    if (origFormat.containsKey(csdKey)) {
+                        origFormat.getByteBuffer(csdKey)?.let { buf ->
+                            val copy = buf.duplicate()
+                            copy.rewind()
+                            setByteBuffer(csdKey, copy)
+                        }
                     }
                 }
             }
-
-            codec = if (targetMime == MediaFormat.MIMETYPE_VIDEO_HEVC) {
-                try {
-                    MediaCodec.createByCodecName("c2.android.hevc.decoder")
-                } catch (_: Exception) {
-                    try {
-                        MediaCodec.createByCodecName("OMX.google.hevc.decoder")
-                    } catch (_: Exception) {
-                        MediaCodec.createDecoderByType(targetMime)
-                    }
-                }
-            } else {
-                MediaCodec.createDecoderByType(targetMime)
-            }
-
-            try {
-                codec.configure(cleanFormat, null, null, 0)
-            } catch (_: Exception) {
-                codec.configure(origFormat, null, null, 0)
-            }
-            codec.start()
 
             val seekTargetsUs = if (durationUs > 10_000_000L) {
-                longArrayOf((durationUs * 0.15).toLong(), (durationUs * 0.28).toLong(), 0L)
+                longArrayOf((durationUs * 0.15).toLong(), (durationUs * 0.30).toLong(), 0L)
             } else {
-                longArrayOf(0L)
+                longArrayOf((durationUs * 0.25).toLong(), 0L)
             }
 
             val bufferInfo = MediaCodec.BufferInfo()
             var fallbackBmp: Bitmap? = null
 
             for (seekUs in seekTargetsUs) {
-                // ابتدا با ارسال فقط ۱ فریم کلیدی + EOS فوری تست می‌کنیم (بسیار سریع)،
-                // و اگر فریم کلیدی CRA بود که نیاز به چند بسته بیشتر داشت، تا ۱۲ بسته می‌فرستیم.
-                for (maxPackets in intArrayOf(2, 12)) {
+                var codec: MediaCodec? = null
+                try {
+                    codec = if (targetMime == MediaFormat.MIMETYPE_VIDEO_HEVC) {
+                        try {
+                            MediaCodec.createByCodecName("c2.android.hevc.decoder")
+                        } catch (_: Exception) {
+                            try {
+                                MediaCodec.createByCodecName("OMX.google.hevc.decoder")
+                            } catch (_: Exception) {
+                                MediaCodec.createDecoderByType(targetMime)
+                            }
+                        }
+                    } else {
+                        MediaCodec.createDecoderByType(targetMime)
+                    }
+
                     try {
-                        codec.flush()
+                        codec.configure(cleanFormat, null, null, 0)
+                    } catch (_: Exception) {
+                        codec.configure(origFormat, null, null, 0)
+                    }
+                    codec.start()
+
+                    try {
                         extractor.seekTo(seekUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
                         if (extractor.sampleTime < 0L && seekUs > 0L) {
                             extractor.seekTo(0L, MediaExtractor.SEEK_TO_NEXT_SYNC)
@@ -854,25 +859,29 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                     }
 
                     var packetsSent = 0
+                    val maxPackets = 20 // ارسال تا ۲۰ پکت بدون قطع زودهنگام با EOS
                     var inputEos = false
                     var outputDone = false
-                    var gotFrameInPass = false
                     var loops = 0
 
-                    while (!outputDone && loops < 80) {
+                    while (!outputDone && loops < 60) {
                         loops++
                         if (!inputEos) {
-                            val inIdx = codec.dequeueInputBuffer(15_000L)
+                            val inIdx = codec.dequeueInputBuffer(10_000L)
                             if (inIdx >= 0) {
-                                if (packetsSent >= maxPackets) {
-                                    // ارسال فوری END_OF_STREAM تا دیکدر بدون انتظار برای 8 فریم B-Frame، فریم کلیدی را خروجی دهد
+                                val inBuf = codec.getInputBuffer(inIdx)
+                                if (packetsSent >= maxPackets || inBuf == null) {
                                     codec.queueInputBuffer(
                                         inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM
                                     )
                                     inputEos = true
                                 } else {
-                                    val inBuf = codec.getInputBuffer(inIdx)
-                                    val sampleSize = if (inBuf != null) extractor.readSampleData(inBuf, 0) else -1
+                                    inBuf.clear()
+                                    val sampleSize = try {
+                                        extractor.readSampleData(inBuf, 0)
+                                    } catch (_: Exception) {
+                                        -1
+                                    }
                                     if (sampleSize < 0) {
                                         codec.queueInputBuffer(
                                             inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM
@@ -888,20 +897,20 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                             }
                         }
 
-                        val outIdx = codec.dequeueOutputBuffer(bufferInfo, 20_000L)
+                        val outIdx = codec.dequeueOutputBuffer(bufferInfo, 15_000L)
                         if (outIdx >= 0) {
                             if (bufferInfo.size > 0) {
                                 val bmp = convertOutputToBitmap(codec, outIdx, bufferInfo)
                                 codec.releaseOutputBuffer(outIdx, false)
                                 if (bmp != null) {
-                                    gotFrameInPass = true
                                     if (!isMostlyBlack(bmp)) {
                                         fallbackBmp?.recycle()
                                         return bmp
                                     }
                                     if (fallbackBmp == null) fallbackBmp = bmp else bmp.recycle()
+                                    // یک فریم (هرچند تاریک) از این نقطه زمانی گرفتیم؛ می‌رویم سراغ seekUs بعدی
+                                    outputDone = true
                                 }
-                                outputDone = true
                             } else {
                                 codec.releaseOutputBuffer(outIdx, false)
                             }
@@ -910,19 +919,21 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                             }
                         }
                     }
-                    if (gotFrameInPass) break
+                } catch (_: Exception) {
+                } finally {
+                    try { codec?.stop() } catch (_: Exception) { }
+                    try { codec?.release() } catch (_: Exception) { }
                 }
             }
             fallbackBmp
         } catch (e: Exception) {
             null
         } finally {
-            try { codec?.stop() } catch (_: Exception) { }
-            try { codec?.release() } catch (_: Exception) { }
             try { extractor.release() } catch (_: Exception) { }
             try { pfd?.close() } catch (_: Exception) { }
         }
     }
+
 
     /** تبدیل بافر خروجی MediaCodec (چه 8-bit YUV_420_888 و چه 10-bit P010 / I010) به Bitmap */
     private fun convertOutputToBitmap(
