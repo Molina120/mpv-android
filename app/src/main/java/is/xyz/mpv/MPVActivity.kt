@@ -233,8 +233,8 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
             )
             v.updateLayoutParams<MarginLayoutParams> {
-                // avoid system bars and cutout
-                leftMargin = insets.left
+                // نوارهای بالا/پایین باید از چپ هم کامل (تمام‌عرض) باشند — حاشیه چپ کات‌اوت نادیده گرفته می‌شود
+                leftMargin = 0
                 topMargin = insets.top
                 bottomMargin = insets.bottom
                 rightMargin = insets.right
@@ -2176,8 +2176,12 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         eventUiHandler.post {
             if (isFinishing || isDestroyed) return@post
             try {
-                var name: String? = psc.meta.formatTitle()
-                    ?: MPVLib.getPropertyString("media-title")
+                // اولویت اول: اسم نمایشی که مرورگر فرستاده (برای content:// ها که آخرین سگمنت فقط ID است)
+                var name: String? = intent.getStringExtra("video_display_name")
+                if (name.isNullOrBlank()) {
+                    name = psc.meta.formatTitle()
+                        ?: MPVLib.getPropertyString("media-title")
+                }
                 if (name.isNullOrBlank()) {
                     val path = MPVLib.getPropertyString("path")
                     name = path?.let { Utils.fileBasename(it) }

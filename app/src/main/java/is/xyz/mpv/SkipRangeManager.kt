@@ -132,14 +132,6 @@ object SkipRangeManager {
         }
     }
 
-    private fun formatSecToHms(sec: Int): String {
-        val s = sec.coerceAtLeast(0)
-        val h = s / 3600
-        val m = (s % 3600) / 60
-        val rem = s % 60
-        return "%02d:%02d:%02d".format(h, m, rem)
-    }
-
     fun checkAndSkipIfNeeded(currentPositionSec: Int, onSkipTriggered: (Double) -> Unit) {
         val activeRanges = ranges
         if (!isEnabled || activeRanges.isEmpty()) return
@@ -193,7 +185,6 @@ object SkipRangeManager {
         val view = LayoutInflater.from(context).inflate(R.layout.dialog_skip_ranges, null)
         val switchSkipEnabled = view.findViewById<SwitchCompat>(R.id.switchSkipEnabled)
         val editSkipRanges = view.findViewById<EditText>(R.id.editSkipRanges)
-        val btnInsertCurrentTime = view.findViewById<TextView>(R.id.btnInsertCurrentTime)
         val radioGroupSkipMode = view.findViewById<RadioGroup>(R.id.radioGroupSkipMode)
         val radioSkipInside = view.findViewById<RadioButton>(R.id.radioSkipInside)
         val radioKeepOnly = view.findViewById<RadioButton>(R.id.radioKeepOnly)
@@ -221,27 +212,10 @@ object SkipRangeManager {
             updateStatusPreview(it?.toString() ?: "")
         }
 
-        // درج سریع زمان فعلی پخش ویدیو در کادر متن با یک کلیک
-        btnInsertCurrentTime.setOnClickListener {
-            val curSec = MPVLib.getPropertyInt("time-pos") ?: 0
-            val formatted = formatSecToHms(curSec)
-            val curText = editSkipRanges.text?.toString() ?: ""
-            val separator = when {
-                curText.isEmpty() -> ""
-                curText.endsWith("-") || curText.endsWith(",") || curText.endsWith("\n") -> ""
-                else -> "-"
-            }
-            val newText = curText + separator + formatted
-            editSkipRanges.setText(newText)
-            editSkipRanges.setSelection(newText.length)
-        }
-
         fun updateModeEnabled(enabled: Boolean) {
             radioSkipInside.isEnabled = enabled
             radioKeepOnly.isEnabled = enabled
             editSkipRanges.isEnabled = enabled
-            btnInsertCurrentTime.isEnabled = enabled
-            btnInsertCurrentTime.alpha = if (enabled) 1.0f else 0.4f
         }
         updateModeEnabled(switchSkipEnabled.isChecked)
         switchSkipEnabled.setOnCheckedChangeListener { _, isChecked ->

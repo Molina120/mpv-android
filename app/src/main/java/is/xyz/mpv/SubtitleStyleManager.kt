@@ -344,15 +344,22 @@ object SubtitleStyleManager {
                 val opt = textColors[idx]
                 val selected = opt.hex.equals(currentColor, ignoreCase = true)
                 val fill = Color.parseColor(opt.hex)
+                // چیپ سفید روی دیالوگ سفید: همیشه حلقه خاکستری مرئی داشته باشد
+                val isWhiteChip = opt.hex.equals("#FFFFFF", ignoreCase = true)
                 tv.background = GradientDrawable().apply {
                     shape = GradientDrawable.OVAL
                     setColor(fill)
                     setStroke(
-                        dp(context, if (selected) 3f else 1f),
-                        if (selected) Color.WHITE else Color.parseColor("#66FFFFFF")
+                        dp(context, if (selected) 3f else 1.5f),
+                        when {
+                            selected && isWhiteChip -> Color.parseColor("#555555")
+                            selected -> Color.WHITE
+                            else -> Color.parseColor("#999999")
+                        }
                     )
                 }
                 tv.text = if (selected) "✓" else ""
+                tv.setTextColor(if (isWhiteChip) Color.parseColor("#555555") else Color.BLACK)
                 tv.scaleX = if (selected) 1.12f else 1.0f
                 tv.scaleY = if (selected) 1.12f else 1.0f
             }
@@ -392,16 +399,17 @@ object SubtitleStyleManager {
                 tv.background = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
                     cornerRadius = dp(context, 8f).toFloat()
+                    // روی دیالوگ سفید: گزینه انتخاب‌نشده خاکستری روشن با متن تیره باشد تا دیده شود
                     setColor(
                         if (selected) Color.parseColor("#7E57C2")
-                        else Color.parseColor("#2AFFFFFF")
+                        else Color.parseColor("#E8E8E8")
                     )
                     setStroke(
                         dp(context, 1f),
-                        if (selected) Color.WHITE else Color.parseColor("#40FFFFFF")
+                        if (selected) Color.WHITE else Color.parseColor("#BDBDBD")
                     )
                 }
-                tv.setTextColor(if (selected) Color.WHITE else Color.parseColor("#D0FFFFFF"))
+                tv.setTextColor(if (selected) Color.WHITE else Color.parseColor("#424242"))
                 tv.paint.isFakeBoldText = selected
             }
         }

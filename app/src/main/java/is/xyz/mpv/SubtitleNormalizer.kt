@@ -144,9 +144,10 @@ object SubtitleNormalizer : MPVLib.EventObserver {
     }
 
     /**
-     * جبران نبود mirror در bidi موتور libass: در متن راست‌به‌چپ، جفت‌کاراکترهای
-     * آینه‌ای را از قبل جابه‌جا می‌کنیم تا خروجی نهایی درست دیده شود.
+     * جبران نبود mirror در bidi موتور libass: در متن راست‌به‌چپ، فقط جفت‌کاراکترهای
+     * Bidi_Mirrored یونیکد ( ) [ ] { } را از قبل جابه‌جا می‌کنیم تا خروجی نهایی درست دیده شود.
      * (تست‌شده با libass واقعی: بدون این کار پرانتزها جابه‌جا نمایش داده می‌شوند)
+     * نکته: «» ‹› در یونیکد Bidi_Mirrored نیستند — جابه‌جا کردن‌شان گیومه را برعکس می‌کند!
      */
     private fun mirrorForLibass(s: String): String {
         var hasRtl = false
@@ -169,10 +170,6 @@ object SubtitleNormalizer : MPVLib.EventObserver {
                     ']' -> '['
                     '{' -> '}'
                     '}' -> '{'
-                    '«' -> '»'
-                    '»' -> '«'
-                    '‹' -> '›'
-                    '›' -> '‹'
                     else -> c
                 }
             )

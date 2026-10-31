@@ -27,34 +27,12 @@
             android:text="@string/skip_enabled"
             android:textStyle="bold" />
 
-        <LinearLayout
+        <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginBottom="4dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
-
-            <TextView
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="@string/skip_hint_label"
-                android:textSize="12.5sp" />
-
-            <TextView
-                android:id="@+id/btnInsertCurrentTime"
-                android:layout_width="wrap_content"
-                android:layout_height="30dp"
-                android:background="?selectableItemBackground"
-                android:clickable="true"
-                android:focusable="false"
-                android:gravity="center"
-                android:paddingHorizontal="10dp"
-                android:text="+ زمان فعلی"
-                android:textColor="#B388FF"
-                android:textSize="12sp"
-                android:textStyle="bold" />
-        </LinearLayout>
+            android:text="@string/skip_hint_label"
+            android:textSize="12.5sp" />
 
         <EditText
             android:id="@+id/editSkipRanges"

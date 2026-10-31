@@ -1386,21 +1386,21 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                     R.string.resume_message,
                     VideoScanner.formatDuration(st!!.positionMs)))
                 .setPositiveButton(R.string.resume_continue) { d, _ ->
-                    playFile(video.uri.toString(), st.positionMs)
+                    playFile(video.uri.toString(), st.positionMs, video.name)
                     d.dismiss()
                 }
                 .setNegativeButton(R.string.resume_from_start) { d, _ ->
                     WatchTracker.clearPosition(ctx, video.id)
-                    playFile(video.uri.toString(), 0L)
+                    playFile(video.uri.toString(), 0L, video.name)
                     d.dismiss()
                 }
                 .show()
         } else {
-            playFile(video.uri.toString(), 0L)
+            playFile(video.uri.toString(), 0L, video.name)
         }
     }
 
-    private fun playFile(filepath: String, resumeMs: Long = 0L) {
+    private fun playFile(filepath: String, resumeMs: Long = 0L, displayName: String? = null) {
         val i: Intent
         if (filepath.startsWith("content://")) {
             i = Intent(Intent.ACTION_VIEW, Uri.parse(filepath))
@@ -1410,6 +1410,8 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         }
         i.setClass(requireContext(), MPVActivity::class.java)
         if (resumeMs > 0) i.putExtra("resume_position_ms", resumeMs)
+        // اسم نمایشی واقعی فایل (برای content:// ها، آخرین سگمنت URI فقط یک ID عددی است)
+        if (!displayName.isNullOrEmpty()) i.putExtra("video_display_name", displayName)
         playerLauncher.launch(i)
     }
 
