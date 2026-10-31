@@ -365,7 +365,13 @@ object SubtitleStyleManager {
                 }
                 isFocusable = true
                 isFocusableInTouchMode = true
-                foreground = context.getDrawable(R.drawable.tv_button_selector)
+                foreground = run {
+                    val tv2 = android.util.TypedValue()
+                    if (context.theme.resolveAttribute(
+                            androidx.appcompat.R.attr.selectableItemBackgroundBorderless, tv2, true))
+                        androidx.appcompat.content.res.AppCompatResources.getDrawable(context, tv2.resourceId)
+                    else null
+                }
                 gravity = Gravity.CENTER
                 setTextColor(Color.BLACK)
                 textSize = 15f
@@ -418,7 +424,13 @@ object SubtitleStyleManager {
                 }
                 isFocusable = true
                 isFocusableInTouchMode = true
-                foreground = context.getDrawable(R.drawable.tv_button_selector)
+                foreground = run {
+                    val tv2 = android.util.TypedValue()
+                    if (context.theme.resolveAttribute(
+                            androidx.appcompat.R.attr.selectableItemBackgroundBorderless, tv2, true))
+                        androidx.appcompat.content.res.AppCompatResources.getDrawable(context, tv2.resourceId)
+                    else null
+                }
                 gravity = Gravity.CENTER
                 text = context.getString(opt.nameRes)
                 textSize = 11.5f

@@ -1010,12 +1010,22 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         return false
     }
 
+    private fun getSelectableBg(): android.graphics.drawable.Drawable? {
+        val tv = android.util.TypedValue()
+        return if (theme.resolveAttribute(
+                androidx.appcompat.R.attr.selectableItemBackgroundBorderless, tv, true))
+            androidx.appcompat.content.res.AppCompatResources.getDrawable(this, tv.resourceId)
+        else null
+    }
+
     private fun updateSelectedDpadButton() {
         dpadButtons().forEachIndexed { i, child ->
-            if (i == btnSelected)
-                child.setBackgroundResource(R.drawable.tv_button_selector)
-            else
+            if (i == btnSelected) {
+                getSelectableBg()?.let { child.background = it }
+                    ?: child.setBackgroundColor(Color.parseColor("#4DFFFFFF"))
+            } else {
                 child.setBackgroundColor(Color.TRANSPARENT)
+            }
         }
     }
 
@@ -1516,7 +1526,7 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             if (isTv) {
                 buttonView.isFocusable = true
                 buttonView.isFocusableInTouchMode = true
-                buttonView.setBackgroundResource(R.drawable.tv_button_selector)
+                getSelectableBg()?.let { buttonView.background = it }
             }
             buttonView.setOnClickListener {
                 val ret = button.handler()
