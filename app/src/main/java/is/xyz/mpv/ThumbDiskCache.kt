@@ -12,8 +12,8 @@ import java.util.concurrent.ConcurrentHashMap
 object ThumbDiskCache {
     private const val TAG = "ThumbDiskCache"
     private const val DIR = "video_thumbs_v2"
-    private const val PREFS = "thumb_cache_v1"
-    private const val KEY_FAILED = "failed_ids"
+    private const val PREFS = "thumb_cache_v2" // تغییر نسخه برای پاک شدن لیست سیاه نسخه‌های قبلی
+    private const val KEY_FAILED = "failed_ids_v60"
 
     @Volatile private var cachedDir: File? = null
     private val failedMemoryCache = ConcurrentHashMap.newKeySet<Long>()
@@ -55,7 +55,6 @@ object ThumbDiskCache {
             val f = file(context, videoId)
             if (!f.exists() || f.length() <= 0L) return null
             val opts = BitmapFactory.Options().apply {
-                // نصف شدن مصرف رم در LruCache و دو برابر شدن سرعت لود از دیسک
                 inPreferredConfig = Bitmap.Config.RGB_565
             }
             BitmapFactory.decodeFile(f.absolutePath, opts)

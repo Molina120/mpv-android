@@ -668,6 +668,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                     durationMs * 150L, // 15%
                     durationMs * 300L, // 30%
                     durationMs * 500L, // 50%
+                    15_000_000L,
                     0L
                 )
             } else {
@@ -675,12 +676,8 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             }
 
             var fallbackFrame: Bitmap? = null
-            for ((index, timeUs) in candidatesUs.withIndex()) {
-                val frame = extractSingleFrame(r, timeUs)
-                if (frame == null) {
-                    if (index == 0) return extractSingleFrame(r, 0L)
-                    continue
-                }
+            for (timeUs in candidatesUs) {
+                val frame = extractSingleFrame(r, timeUs) ?: continue
                 if (!isMostlyBlack(frame)) {
                     if (fallbackFrame != null && fallbackFrame !== frame) fallbackFrame.recycle()
                     return frame
@@ -697,35 +694,44 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
     }
 
     private fun extractSingleFrame(r: MediaMetadataRetriever, timeUs: Long): Bitmap? {
-        return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                // بسیار مهم: بدون ARGB_8888، مبدل رنگ اندروید روی ویدیوهای 10-bit x265 نال برمی‌گرداند
-                val params = MediaMetadataRetriever.BitmapParams().apply {
-                    preferredConfig = Bitmap.Config.ARGB_8888
-                }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val params = MediaMetadataRetriever.BitmapParams().apply {
+                preferredConfig = Bitmap.Config.ARGB_8888
+            }
+            try {
                 r.getScaledFrameAtTime(
                     timeUs,
                     MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
                     THUMB_WIDTH,
                     THUMB_HEIGHT,
                     params
-                ) ?: r.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, params)
-            } else {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-                    r.getScaledFrameAtTime(
-                        timeUs,
-                        MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
-                        THUMB_WIDTH,
-                        THUMB_HEIGHT
-                    ) ?: r.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                } else {
-                    r.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                }
-            }
+                )?.let { return it }
+            } catch (_: Exception) { }
+
+            try {
+                r.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, params)
+                    ?.let { return it }
+            } catch (_: Exception) { }
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            try {
+                r.getScaledFrameAtTime(
+                    timeUs,
+                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                    THUMB_WIDTH,
+                    THUMB_HEIGHT
+                )?.let { return it }
+            } catch (_: Exception) { }
+        }
+
+        return try {
+            r.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
         } catch (_: Exception) {
             null
         }
     }
+
 
     /**
      * مرحله ۲: دیکد در حالت ByteBuffer پردازنده (بدون Surface گرافیکی)
@@ -742,14 +748,8 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             try {
                 pfd = appCtx.contentResolver.openFileDescriptor(video.uri, "r")
                 if (pfd != null) {
-                    val realPath = Utils.findRealPath(pfd.fd)
-                    if (realPath != null) {
-                        extractor.setDataSource(realPath)
-                        sourceSet = true
-                    } else {
-                        extractor.setDataSource(pfd.fileDescriptor)
-                        sourceSet = true
-                    }
+                    extractor.setDataSource(pfd.fileDescriptor)
+                    sourceSet = true
                 }
             } catch (_: Exception) { }
 
@@ -787,24 +787,15 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                 origMime
             }
 
-            // ذخیره کپی هدرهای csd (شامل VPS/SPS/PPS در x265) برای ارسال صریح بعد از هر seek
-            val csdBuffers = mutableListOf<java.nio.ByteBuffer>()
             val cleanFormat = MediaFormat.createVideoFormat(targetMime, width, height).apply {
                 setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, maxOf(width * height * 2, 4 * 1024 * 1024))
                 for (csdKey in arrayOf("csd-0", "csd-1", "csd-2")) {
                     if (origFormat.containsKey(csdKey)) {
                         origFormat.getByteBuffer(csdKey)?.let { buf ->
                             val copyForFormat = java.nio.ByteBuffer.allocate(buf.remaining())
-                            val dup = buf.duplicate()
-                            copyForFormat.put(dup)
+                            copyForFormat.put(buf.duplicate())
                             copyForFormat.flip()
                             setByteBuffer(csdKey, copyForFormat)
-
-                            val copyForQueue = java.nio.ByteBuffer.allocate(buf.remaining())
-                            val dup2 = buf.duplicate()
-                            copyForQueue.put(dup2)
-                            copyForQueue.flip()
-                            csdBuffers.add(copyForQueue)
                         }
                     }
                 }
@@ -836,7 +827,6 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                         MediaCodec.createDecoderByType(targetMime)
                     }
 
-                    // نکته حیاتی: هیچ KEY_COLOR_FORMAT اجباری ست نمی‌شود تا 10-bit P010/I010 رد نشود
                     try {
                         codec.configure(cleanFormat, null, null, 0)
                     } catch (_: Exception) {
@@ -844,7 +834,6 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                     }
                     codec.start()
 
-                    // بدون فراخوانی codec.flush() که باعث پاک شدن csd-0 می‌شد، مستقیماً extractor را پرش می‌دهیم
                     try {
                         if (seekUs > 0L) {
                             extractor.seekTo(seekUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
@@ -858,32 +847,20 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                         extractor.seekTo(0L, MediaExtractor.SEEK_TO_NEXT_SYNC)
                     }
 
-                    var csdIndex = 0
                     var packetsSent = 0
-                    val maxPackets = 18 // پوشش کامل فریم‌های کلیدی CRA و B-Frameهای RASL در انکودهای x265 PSA
+                    val maxPackets = 30 // پوشش کامل فریم‌های RASL بعد از CRA در انکودهای 10-bit x265
                     var inputEos = false
                     var outputDone = false
                     var decodedFramesCount = 0
                     var loops = 0
 
-                    while (!outputDone && loops < 90) {
+                    while (!outputDone && loops < 160) {
                         loops++
                         if (!inputEos) {
-                            val inIdx = codec.dequeueInputBuffer(15_000L)
+                            val inIdx = codec.dequeueInputBuffer(10_000L)
                             if (inIdx >= 0) {
                                 val inBuf = codec.getInputBuffer(inIdx)
-                                if (inBuf == null) {
-                                    codec.queueInputBuffer(inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                                    inputEos = true
-                                } else if (csdIndex < csdBuffers.size) {
-                                    // تزریق صریح VPS/SPS/PPS قبل از اولین فریم کلیدی
-                                    val csd = csdBuffers[csdIndex++].duplicate()
-                                    csd.rewind()
-                                    inBuf.clear()
-                                    val size = csd.remaining()
-                                    inBuf.put(csd)
-                                    codec.queueInputBuffer(inIdx, 0, size, 0L, MediaCodec.BUFFER_FLAG_CODEC_CONFIG)
-                                } else if (packetsSent >= maxPackets) {
+                                if (inBuf == null || packetsSent >= maxPackets) {
                                     codec.queueInputBuffer(inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                                     inputEos = true
                                 } else {
@@ -906,7 +883,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                             }
                         }
 
-                        val outIdx = codec.dequeueOutputBuffer(bufferInfo, 20_000L)
+                        val outIdx = codec.dequeueOutputBuffer(bufferInfo, 15_000L)
                         if (outIdx >= 0) {
                             if (bufferInfo.size > 0) {
                                 val bmp = convertOutputToBitmap(codec, outIdx, bufferInfo)
@@ -918,8 +895,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                                         return bmp
                                     }
                                     if (fallbackBmp == null) fallbackBmp = bmp else bmp.recycle()
-                                    // اگر فریم اول سیاه بود، تا ۳ فریم دیگر از همین نقطه بخوان، سپس برو به seekUs بعدی
-                                    if (decodedFramesCount >= 3) {
+                                    if (decodedFramesCount >= 4) {
                                         outputDone = true
                                     }
                                 }
@@ -947,6 +923,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             try { pfd?.close() } catch (_: Exception) { }
         }
     }
+
 
 
     private fun convertOutputToBitmap(
