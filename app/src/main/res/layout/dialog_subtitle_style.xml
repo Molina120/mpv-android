@@ -3,13 +3,17 @@
     android:id="@+id/scrollSubStyle"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:verticalScrollbarPosition="left"
-    android:paddingHorizontal="20dp"
-    android:paddingVertical="12dp">
+    android:fadeScrollbars="false"
+    android:overScrollMode="never"
+    android:paddingHorizontal="18dp"
+    android:paddingTop="8dp"
+    android:paddingBottom="4dp"
+    android:verticalScrollbarPosition="left">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:descendantFocusability="blocksDescendants"
         android:orientation="vertical">
 
         <!-- اندازه فونت -->
@@ -18,16 +22,47 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/subtitle_size_label"
+            android:textSize="13sp"
             android:textStyle="bold" />
 
-        <SeekBar
-            android:id="@+id/seekSubSize"
+        <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:layout_marginBottom="12dp"
-            android:minHeight="48dp"
-            android:max="80" />
+            android:layout_height="38dp"
+            android:layout_marginBottom="6dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/btnSizeMinus"
+                android:layout_width="36dp"
+                android:layout_height="32dp"
+                android:background="?selectableItemBackgroundBorderless"
+                android:clickable="true"
+                android:focusable="false"
+                android:gravity="center"
+                android:text="−"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+
+            <SeekBar
+                android:id="@+id/seekSubSize"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:max="80" />
+
+            <TextView
+                android:id="@+id/btnSizePlus"
+                android:layout_width="36dp"
+                android:layout_height="32dp"
+                android:background="?selectableItemBackgroundBorderless"
+                android:clickable="true"
+                android:focusable="false"
+                android:gravity="center"
+                android:text="+"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+        </LinearLayout>
 
         <!-- موقعیت عمودی -->
         <TextView
@@ -35,16 +70,47 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/subtitle_pos_label"
+            android:textSize="13sp"
             android:textStyle="bold" />
 
-        <SeekBar
-            android:id="@+id/seekSubPos"
+        <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:layout_marginBottom="12dp"
-            android:minHeight="48dp"
-            android:max="100" />
+            android:layout_height="38dp"
+            android:layout_marginBottom="6dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/btnPosMinus"
+                android:layout_width="36dp"
+                android:layout_height="32dp"
+                android:background="?selectableItemBackgroundBorderless"
+                android:clickable="true"
+                android:focusable="false"
+                android:gravity="center"
+                android:text="−"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+
+            <SeekBar
+                android:id="@+id/seekSubPos"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:max="100" />
+
+            <TextView
+                android:id="@+id/btnPosPlus"
+                android:layout_width="36dp"
+                android:layout_height="32dp"
+                android:background="?selectableItemBackgroundBorderless"
+                android:clickable="true"
+                android:focusable="false"
+                android:gravity="center"
+                android:text="+"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+        </LinearLayout>
 
         <!-- ضخامت حاشیه و سایه -->
         <TextView
@@ -52,79 +118,116 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/subtitle_border_label"
+            android:textSize="13sp"
             android:textStyle="bold" />
 
-        <SeekBar
-            android:id="@+id/seekSubBorder"
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="38dp"
+            android:layout_marginBottom="8dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/btnBorderMinus"
+                android:layout_width="36dp"
+                android:layout_height="32dp"
+                android:background="?selectableItemBackgroundBorderless"
+                android:clickable="true"
+                android:focusable="false"
+                android:gravity="center"
+                android:text="−"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+
+            <SeekBar
+                android:id="@+id/seekSubBorder"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:max="60" />
+
+            <TextView
+                android:id="@+id/btnBorderPlus"
+                android:layout_width="36dp"
+                android:layout_height="32dp"
+                android:background="?selectableItemBackgroundBorderless"
+                android:clickable="true"
+                android:focusable="false"
+                android:gravity="center"
+                android:text="+"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <!-- رنگ متن (دکمه‌های رنگی تک‌کلیکی) -->
+        <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:layout_marginBottom="12dp"
-            android:minHeight="48dp"
-            android:max="60" />
+            android:layout_marginBottom="6dp"
+            android:text="@string/subtitle_text_color_label"
+            android:textSize="13sp"
+            android:textStyle="bold" />
 
-        <!-- رنگ متن و کادر پس‌زمینه: کنار هم در یک ردیف (مناسب حالت افقی) -->
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="10dp"
+            android:overScrollMode="never"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:id="@+id/colorChipsContainer"
+                android:layout_width="wrap_content"
+                android:layout_height="42dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal" />
+        </HorizontalScrollView>
+
+        <!-- کادر پس‌زمینه (دکمه‌های تک‌کلیکی) -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="6dp"
+            android:text="@string/subtitle_bg_color_label"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <LinearLayout
+            android:id="@+id/bgChipsContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="10dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal" />
+
+        <!-- سوئیچ‌های Bold و ASS در یک ردیف فشرده و خوش‌دست -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginBottom="12dp">
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
-            <LinearLayout
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/switchSubBold"
                 android:layout_width="0dp"
-                android:layout_height="wrap_content"
+                android:layout_height="42dp"
                 android:layout_weight="1"
-                android:orientation="vertical"
-                android:paddingEnd="8dp">
+                android:focusable="false"
+                android:paddingEnd="8dp"
+                android:text="@string/subtitle_bold"
+                android:textSize="13sp" />
 
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/subtitle_text_color_label"
-                    android:textStyle="bold" />
-
-                <Spinner
-                    android:id="@+id/spinnerSubColor"
-                    android:layout_width="match_parent"
-                    android:layout_height="48dp" />
-            </LinearLayout>
-
-            <LinearLayout
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/switchAssOverride"
                 android:layout_width="0dp"
-                android:layout_height="wrap_content"
+                android:layout_height="42dp"
                 android:layout_weight="1"
-                android:orientation="vertical"
-                android:paddingStart="8dp">
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/subtitle_bg_color_label"
-                    android:textStyle="bold" />
-
-                <Spinner
-                    android:id="@+id/spinnerSubBgColor"
-                    android:layout_width="match_parent"
-                    android:layout_height="48dp" />
-            </LinearLayout>
+                android:focusable="false"
+                android:paddingStart="8dp"
+                android:text="@string/subtitle_ass_override"
+                android:textSize="13sp" />
         </LinearLayout>
-
-        <!-- برجسته کردن (Bold) -->
-        <androidx.appcompat.widget.SwitchCompat
-            android:id="@+id/switchSubBold"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="16dp"
-            android:minHeight="48dp"
-            android:text="@string/subtitle_bold" />
-
-        <!-- اعمال روی زیرنویس‌های ASS -->
-        <androidx.appcompat.widget.SwitchCompat
-            android:id="@+id/switchAssOverride"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:minHeight="48dp"
-            android:text="@string/subtitle_ass_override" />
 
     </LinearLayout>
 </ScrollView>

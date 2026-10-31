@@ -11,6 +11,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.media.Image
 import android.media.MediaCodec
 import android.media.MediaExtractor
@@ -168,36 +169,66 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             openFolder != null || searchMenuItem?.isActionViewExpanded == true
     }
 
-    /** فوکوس فیلد سرچ + کیبورد + کرسر سفید مرئی روی تولبار بنفش */
-    private fun focusSearchField(searchView: SearchView) {
-        if (!isAdded) return
-        val et = searchView.findViewById<EditText>(androidx.appcompat.R.id.search_src_text) ?: return
-        et.isFocusable = true
-        et.isFocusableInTouchMode = true
-        et.isCursorVisible = true
-        et.requestFocusFromTouch()
+    /** تنظیم رنگ متن، رنگ هایلایت سلکت، دستگیره‌های انتخاب و کرسر سفید چشمک‌زن */
+    private fun styleSearchEditText(searchView: SearchView): EditText? {
+        if (!isAdded) return null
+        val et = searchView.findViewById<EditText>(androidx.appcompat.R.id.search_src_text) ?: return null
+
         et.setTextColor(Color.WHITE)
         et.setHintTextColor(Color.parseColor("#B3FFFFFF"))
-        ensureVisibleCursor(et)
-        val imm = requireContext().getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-        imm.showSoftInput(et, InputMethodManager.SHOW_IMPLICIT)
-    }
+        // رنگ آبی فیروزه‌ای نیمه‌شفاف و کاملاً مشخص برای پس‌زمینه متن سلکت‌شده روی تولبار بنفش
+        et.highlightColor = Color.parseColor("#8800E5FF")
 
-    /** ست کردن صریح drawable کرسر تا به تم وابسته نباشد */
-    private fun ensureVisibleCursor(et: EditText) {
+        // ساخت کرسر سفید مستقل از تم (غیرقابل تغییر رنگ توسط MIUI/Android)
         try {
-            val d = ContextCompat.getDrawable(requireContext(), R.drawable.search_cursor_white) ?: return
+            val density = resources.displayMetrics.density
+            val cursorDrawable = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                setColor(Color.WHITE)
+                setSize((2f * density).toInt().coerceAtLeast(2), (22f * density).toInt())
+                setTintList(null)
+            }
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                et.textCursorDrawable = d
+                et.textCursorDrawable = cursorDrawable
+                // روشن کردن رنگ دستگیره‌های چپ، راست و وسطِ انتخاب متن
+                val handleColor = Color.parseColor("#00E5FF")
+                et.textSelectHandle?.mutate()?.let {
+                    it.setTint(handleColor)
+                    et.setTextSelectHandle(it)
+                }
+                et.textSelectHandleLeft?.mutate()?.let {
+                    it.setTint(handleColor)
+                    et.setTextSelectHandleLeft(it)
+                }
+                et.textSelectHandleRight?.mutate()?.let {
+                    it.setTint(handleColor)
+                    et.setTextSelectHandleRight(it)
+                }
             } else {
                 val editorField = TextView::class.java.getDeclaredField("mEditor")
                 editorField.isAccessible = true
                 val editor = editorField.get(et)
                 val cursorField = editor.javaClass.getDeclaredField("mCursorDrawable")
                 cursorField.isAccessible = true
-                cursorField.set(editor, arrayOf(d, d))
+                cursorField.set(editor, arrayOf(cursorDrawable, cursorDrawable))
             }
         } catch (_: Exception) { }
+
+        return et
+    }
+
+    /** فوکوس روی فیلد سرچ، باز کردن کیبورد و راه‌اندازی مجدد چشمک‌زدن کرسر */
+    private fun focusSearchField(searchView: SearchView) {
+        val et = styleSearchEditText(searchView) ?: return
+        et.isFocusable = true
+        et.isFocusableInTouchMode = true
+        et.requestFocus()
+        // خاموش و روشن کردن isCursorVisible باعث ریست شدن تایمر Blink در Editor اندروید می‌شود
+        et.isCursorVisible = false
+        et.isCursorVisible = true
+        val imm = requireContext().getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.showSoftInput(et, InputMethodManager.SHOW_IMPLICIT)
     }
 
     private val videoPermission: String
@@ -273,20 +304,30 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         searchMenuItem = searchItem
         val searchView = searchItem.actionView as SearchView
         searchView.queryHint = getString(R.string.search_hint)
+
+        // اعمال اولیه استایل کرسر و رنگ انتخاب متن به محض ساخته شدن SearchView
+        styleSearchEditText(searchView)
+
         searchView.setOnQueryTextListener(object : SearchView.OnQueryTextListener {
             override fun onQueryTextSubmit(query: String?): Boolean = true
             override fun onQueryTextChange(newText: String?): Boolean {
                 searchQuery = newText?.trim() ?: ""
                 refreshDisplay()
+                // حفظ فوکوس و نشانگر چشمک‌زن پس از به‌روزرسانی لیست ویدیوها
+                if (searchItem.isActionViewExpanded) {
+                    val et = searchView.findViewById<EditText>(androidx.appcompat.R.id.search_src_text)
+                    if (et != null && !et.hasFocus()) {
+                        et.requestFocus()
+                    }
+                }
                 return true
             }
         })
         searchItem.setOnActionExpandListener(object : MenuItem.OnActionExpandListener {
             override fun onMenuItemActionExpand(item: MenuItem): Boolean {
-                // فوکوس مطمئن + کیبورد + کرسر سفید مرئی (دو تلاش برای اطمینان از لِی‌اوت)
                 searchView.isIconified = false
                 searchView.post { focusSearchField(searchView) }
-                searchView.postDelayed({ focusSearchField(searchView) }, 150)
+                searchView.postDelayed({ focusSearchField(searchView) }, 120)
                 updateBackCallback()
                 return true
             }
@@ -1227,7 +1268,10 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             adapter.items = list.map { BrowserItem.VideoRow(it) }
             binding.emptyView.isVisible = list.isEmpty()
         }
-        binding.videoList.scrollToPosition(0)
+        // هنگام تایپ در سرچ، فوکوس از روی کیبورد و کرسر برداشته نشود
+        if (searchMenuItem?.isActionViewExpanded != true) {
+            binding.videoList.scrollToPosition(0)
+        }
     }
 
     private fun showVideos(folder: VideoScanner.Folder) {
@@ -1244,7 +1288,10 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             .filter { q.isEmpty() || it.name.contains(q, ignoreCase = true) }
         adapter.items = list.map { BrowserItem.VideoRow(it) }
         binding.emptyView.isVisible = list.isEmpty()
-        binding.videoList.scrollToPosition(0)
+        // هنگام تایپ در سرچ، فوکوس از روی کیبورد و کرسر برداشته نشود
+        if (searchMenuItem?.isActionViewExpanded != true) {
+            binding.videoList.scrollToPosition(0)
+        }
     }
 
     private fun showSortDialog() {

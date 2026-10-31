@@ -3,40 +3,41 @@ package `is`.xyz.mpv
 import android.content.Context
 import android.os.SystemClock
 import android.view.LayoutInflater
+import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.SwitchCompat
 import androidx.core.widget.doAfterTextChanged
 import androidx.preference.PreferenceManager
+import kotlin.math.max
 
 object SkipRangeManager {
     data class TimeRange(val startSec: Double, val endSec: Double)
 
     enum class SkipMode {
-        SKIP_SPECIFIED_RANGES, // پرش از شروع بازه به پایان همان بازه
-        PLAY_ONLY_SPECIFIED_RANGES // پخش فقط بازه‌های مشخص شده و پرش از فواصل بین آن‌ها
+        SKIP_SPECIFIED_RANGES,
+        PLAY_ONLY_SPECIFIED_RANGES
     }
 
-    // کلیدهای SharedPreferences برای ماندگاری بعد از بستن برنامه
     private const val PREF_SKIP_ENABLED = "skip_enabled"
     private const val PREF_SKIP_MODE = "skip_mode"
     private const val PREF_SKIP_RANGES_TEXT = "skip_ranges_text"
 
+    @Volatile
     var isEnabled: Boolean = true
+    @Volatile
     var mode: SkipMode = SkipMode.SKIP_SPECIFIED_RANGES
     var rawInputText: String = ""
         private set
+    @Volatile
     private var ranges: List<TimeRange> = emptyList()
     private var prefsLoaded = false
 
-    // جلوگیری از ارسال دستورات Seek تکراری در کسری از ثانیه
     private var lastSeekTimestampMs: Long = 0L
-    private const val SEEK_COOLDOWN_MS = 900L
+    private var lastSkippedTargetSec: Double = -1.0
+    private const val SEEK_COOLDOWN_MS = 950L
 
-    /**
-     * بارگذاری تنظیمات ذخیره‌شده از SharedPreferences.
-     * فقط یک بار در هر session اجرا می‌شود؛ بعد از آن مقادیر در حافظه هستند.
-     */
     fun loadFromPrefs(context: Context) {
         if (prefsLoaded) return
         prefsLoaded = true
@@ -51,12 +52,10 @@ object SkipRangeManager {
             }
             rawInputText = prefs.getString(PREF_SKIP_RANGES_TEXT, "") ?: ""
             ranges = parseRanges(rawInputText)
-        } catch (e: Exception) {
-            // در صورت خطا، مقادیر پیش‌فرض باقی می‌مانند
+        } catch (_: Exception) {
         }
     }
 
-    /** ذخیره تنظیمات در SharedPreferences تا بعد از بستن برنامه باقی بمانند */
     private fun saveToPrefs(context: Context) {
         try {
             PreferenceManager.getDefaultSharedPreferences(context).edit()
@@ -64,13 +63,12 @@ object SkipRangeManager {
                 .putString(PREF_SKIP_MODE, mode.name)
                 .putString(PREF_SKIP_RANGES_TEXT, rawInputText)
                 .apply()
-        } catch (e: Exception) {
-            // نادیده بگیر
+        } catch (_: Exception) {
         }
     }
 
     /**
-     * تبدیل اعداد فارسی/عربی به انگلیسی و پارس کردن رشته بازه‌ها
+     * تبدیل اعداد فارسی/عربی به انگلیسی، پارس کردن بازه‌ها و ادغام بازه‌های هم‌پوشان
      */
     fun parseRanges(input: String): List<TimeRange> {
         val normalized = input
@@ -80,13 +78,12 @@ object SkipRangeManager {
             .replace('٠', '0').replace('١', '1').replace('٢', '2')
             .replace('٣', '3').replace('٤', '4').replace('٥', '5')
             .replace('٦', '6').replace('٧', '7').replace('٨', '8').replace('٩', '9')
+            .replace('–', '-').replace('—', '-')
 
-        val result = mutableListOf<TimeRange>()
-        // جداسازی بر اساس کاما، سمی‌کالن یا خط جدید
+        val rawList = mutableListOf<TimeRange>()
         val tokens = normalized.split(Regex("[,;\\n]+"))
 
         for (rawToken in tokens) {
-            // حذف فاصله‌ها و علامت + در ابتدای هر بخش (مثل ,+ 00:35:40-00:39:10)
             val cleaned = rawToken.trim().removePrefix("+").trim()
             if (cleaned.isEmpty()) continue
 
@@ -97,67 +94,86 @@ object SkipRangeManager {
             val end = parseTimeToSeconds(parts[1].trim())
 
             if (start != null && end != null && end > start) {
-                result.add(TimeRange(start, end))
+                rawList.add(TimeRange(start, end))
             }
         }
 
-        return result.sortedBy { it.startSec }
+        if (rawList.size <= 1) return rawList
+
+        // مرتب‌سازی و ادغام بازه‌های هم‌پوشان یا چسبیده به هم
+        val sorted = rawList.sortedBy { it.startSec }
+        val merged = mutableListOf<TimeRange>()
+        var current = sorted[0]
+        for (i in 1 until sorted.size) {
+            val next = sorted[i]
+            if (next.startSec <= current.endSec + 0.5) {
+                current = TimeRange(current.startSec, max(current.endSec, next.endSec))
+            } else {
+                merged.add(current)
+                current = next
+            }
+        }
+        merged.add(current)
+        return merged
     }
 
-    /**
-     * تبدیل فرمت HH:MM:SS یا MM:SS یا SS به ثانیه
-     */
     private fun parseTimeToSeconds(timeStr: String): Double? {
         if (timeStr.isEmpty()) return null
         val parts = timeStr.split(":")
         return try {
             when (parts.size) {
-                3 -> {
-                    val h = parts[0].toDouble()
-                    val m = parts[1].toDouble()
-                    val s = parts[2].toDouble()
-                    h * 3600.0 + m * 60.0 + s
-                }
-                2 -> {
-                    val m = parts[0].toDouble()
-                    val s = parts[1].toDouble()
-                    m * 60.0 + s
-                }
+                3 -> parts[0].toDouble() * 3600.0 + parts[1].toDouble() * 60.0 + parts[2].toDouble()
+                2 -> parts[0].toDouble() * 60.0 + parts[1].toDouble()
                 1 -> parts[0].toDouble()
                 else -> null
             }
-        } catch (e: NumberFormatException) {
+        } catch (_: NumberFormatException) {
             null
         }
     }
 
-    /**
-     * بررسی موقعیت فعلی پخش و انجام پرش در صورت رسیدن به نقاط تعیین‌شده
-     */
+    private fun formatSecToHms(sec: Int): String {
+        val s = sec.coerceAtLeast(0)
+        val h = s / 3600
+        val m = (s % 3600) / 60
+        val rem = s % 60
+        return "%02d:%02d:%02d".format(h, m, rem)
+    }
+
     fun checkAndSkipIfNeeded(currentPositionSec: Int, onSkipTriggered: (Double) -> Unit) {
-        if (!isEnabled || ranges.isEmpty()) return
+        val activeRanges = ranges
+        if (!isEnabled || activeRanges.isEmpty()) return
 
         val now = SystemClock.elapsedRealtime()
         if (now - lastSeekTimestampMs < SEEK_COOLDOWN_MS) return
 
         val pos = currentPositionSec.toDouble()
 
+        // اگر کاربر به عقب برگشته، قفل هدف قبلی را آزاد کن
+        if (pos < lastSkippedTargetSec - 3.0 || pos > lastSkippedTargetSec + 2.0) {
+            lastSkippedTargetSec = -1.0
+        }
+
         when (mode) {
             SkipMode.SKIP_SPECIFIED_RANGES -> {
-                // اگر زمان فعلی داخل یکی از بازه‌های حذفی [start, end) قرار گرفت، بپر به end
-                val matched = ranges.firstOrNull { pos >= it.startSec && pos < (it.endSec - 0.8) }
-                if (matched != null) {
+                val matched = activeRanges.firstOrNull {
+                    pos >= it.startSec && pos < (it.endSec - 0.8)
+                }
+                if (matched != null && matched.endSec != lastSkippedTargetSec) {
                     lastSeekTimestampMs = now
+                    lastSkippedTargetSec = matched.endSec
                     onSkipTriggered(matched.endSec)
                 }
             }
             SkipMode.PLAY_ONLY_SPECIFIED_RANGES -> {
-                // اگر زمان فعلی داخل هیچ‌کدام از بازه‌های مجاز نیست، بپر به شروعِ بازه بعدی
-                val insideAny = ranges.any { pos >= (it.startSec - 0.8) && pos < it.endSec }
+                val insideAny = activeRanges.any {
+                    pos >= (it.startSec - 0.8) && pos < it.endSec
+                }
                 if (!insideAny) {
-                    val nextRange = ranges.firstOrNull { it.startSec > pos }
-                    if (nextRange != null) {
+                    val nextRange = activeRanges.firstOrNull { it.startSec > pos }
+                    if (nextRange != null && nextRange.startSec != lastSkippedTargetSec) {
                         lastSeekTimestampMs = now
+                        lastSkippedTargetSec = nextRange.startSec
                         onSkipTriggered(nextRange.startSec)
                     }
                 }
@@ -168,15 +184,16 @@ object SkipRangeManager {
     fun clear() {
         rawInputText = ""
         ranges = emptyList()
+        lastSkippedTargetSec = -1.0
     }
 
     fun showSkipDialog(context: Context, onDismiss: () -> Unit) {
-        // بارگذاری مقادیر ذخیره‌شده (اگر قبلاً لود نشده)
         loadFromPrefs(context)
 
         val view = LayoutInflater.from(context).inflate(R.layout.dialog_skip_ranges, null)
         val switchSkipEnabled = view.findViewById<SwitchCompat>(R.id.switchSkipEnabled)
         val editSkipRanges = view.findViewById<EditText>(R.id.editSkipRanges)
+        val btnInsertCurrentTime = view.findViewById<TextView>(R.id.btnInsertCurrentTime)
         val radioGroupSkipMode = view.findViewById<RadioGroup>(R.id.radioGroupSkipMode)
         val radioSkipInside = view.findViewById<RadioButton>(R.id.radioSkipInside)
         val radioKeepOnly = view.findViewById<RadioButton>(R.id.radioKeepOnly)
@@ -204,17 +221,34 @@ object SkipRangeManager {
             updateStatusPreview(it?.toString() ?: "")
         }
 
-        // وقتی auto-skip خاموش است، گزینه‌های حالت خاکستری/غیرفعال باشند
+        // درج سریع زمان فعلی پخش ویدیو در کادر متن با یک کلیک
+        btnInsertCurrentTime.setOnClickListener {
+            val curSec = MPVLib.getPropertyInt("time-pos") ?: 0
+            val formatted = formatSecToHms(curSec)
+            val curText = editSkipRanges.text?.toString() ?: ""
+            val separator = when {
+                curText.isEmpty() -> ""
+                curText.endsWith("-") || curText.endsWith(",") || curText.endsWith("\n") -> ""
+                else -> "-"
+            }
+            val newText = curText + separator + formatted
+            editSkipRanges.setText(newText)
+            editSkipRanges.setSelection(newText.length)
+        }
+
         fun updateModeEnabled(enabled: Boolean) {
             radioSkipInside.isEnabled = enabled
             radioKeepOnly.isEnabled = enabled
+            editSkipRanges.isEnabled = enabled
+            btnInsertCurrentTime.isEnabled = enabled
+            btnInsertCurrentTime.alpha = if (enabled) 1.0f else 0.4f
         }
         updateModeEnabled(switchSkipEnabled.isChecked)
         switchSkipEnabled.setOnCheckedChangeListener { _, isChecked ->
             updateModeEnabled(isChecked)
         }
 
-        AlertDialog.Builder(context)
+        val alertDialog = AlertDialog.Builder(context)
             .setTitle(R.string.skip_title)
             .setView(view)
             .setPositiveButton(R.string.dialog_save) { _, _ ->
@@ -227,17 +261,29 @@ object SkipRangeManager {
                     SkipMode.PLAY_ONLY_SPECIFIED_RANGES
                 }
                 lastSeekTimestampMs = 0L
-                // ذخیره دائمی تا بعد از بستن برنامه باقی بماند
+                lastSkippedTargetSec = -1.0
                 saveToPrefs(context)
             }
-            .setNeutralButton(R.string.skip_clear) { _, _ ->
-                clear()
-                // پاکسازی را هم ذخیره کن
-                saveToPrefs(context)
-            }
+            .setNeutralButton(R.string.skip_clear, null) // پاکسازی درجا بدون پرش یا بستن ناخواسته
             .setNegativeButton(R.string.dialog_cancel, null)
             .setOnDismissListener { onDismiss() }
             .create()
-            .show()
+
+        alertDialog.window?.setSoftInputMode(
+            WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN or
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN
+        )
+
+        SubtitleStyleManager.showImmersiveDialog(context, alertDialog, maxHeightRatio = 0.90)
+
+        // عملکرد دکمه پاکسازی درجا بدون بستن اجباری دیالوگ
+        alertDialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.setOnClickListener {
+            editSkipRanges.setText("")
+            clear()
+            saveToPrefs(context)
+            updateStatusPreview("")
+            val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            imm?.hideSoftInputFromWindow(editSkipRanges.windowToken, 0)
+        }
     }
 }

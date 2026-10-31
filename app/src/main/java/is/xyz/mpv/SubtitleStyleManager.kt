@@ -1,29 +1,31 @@
 package `is`.xyz.mpv
 
+import android.annotation.SuppressLint
+import android.app.Activity
 import android.content.Context
 import android.content.SharedPreferences
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.preference.PreferenceManager
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.LayoutInflater
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
+import android.view.Window
 import android.view.WindowInsets
 import android.view.WindowManager
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.SwitchCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 
-/*
- * v18: تغییرات برای رفع گیر کردن دیالوگ
- *  - هر تغییر فقط یک «استایل» جدید می‌سازد؛ اگر با آخرین استایل اعمال‌شده یکی باشد، هیچ کاری روی mpv نمی‌شود.
- *  - osd-border-style / osd-back-color فقط وقتی پس‌زمینه عوض شده ست می‌شوند (قبلاً هر تغییری این‌ها را هم ست می‌کرد).
- *  - باز شدن دیالوگ دیگر اعمال اضافه ندارد (قبلاً applyAndSave و کال‌بک اولیهٔ اسپینرها چند کار سنگین می‌ساختند).
- *  - کشیدن اسلایدر با حداکثر یک پیش‌نمایش در هر PREVIEW_THROTTLE_MS؛ رها کردن = اعمال فوری.
- *  - همه‌چیز از طریق MpvBg.postLatest با یک کلید می‌رود، پس فقط آخرین حالت اجرا می‌شود.
- *  - ریست، اسپینر رنگ/پس‌زمینه را هم به‌روز می‌کند (قبلاً فقط اسلایدرها و سوئیچ‌ها ریست می‌شدند).
- */
 object SubtitleStyleManager {
     private const val PREF_SUB_SIZE = "custom_sub_font_size"
     private const val PREF_SUB_POS = "custom_sub_pos"
@@ -41,26 +43,8 @@ object SubtitleStyleManager {
     private const val DEFAULT_BG_COLOR = "transparent"
     private const val DEFAULT_ASS_OVERRIDE = true
 
-    /** فاصلهٔ پیش‌نمایش زنده هنگام کشیدن اسلایدر (ms). بزرگ‌تر = سبک‌تر روی گوشی‌های ضعیف */
-    private const val PREVIEW_THROTTLE_MS = 250L
-
-    /** کلید صف MpvBg: فقط آخرین استایل اجرا می‌شود */
+    private const val PREVIEW_THROTTLE_MS = 180L
     private const val KEY_STYLE = "sub-style"
-
-    /**
-     * ارتفاع واقعی قابل‌استفاده پنجره، بدون نوارهای سیستم (مثل دکمه هوم/ناوبری).
-     * تا ارتفاع منو با ظاهر یا ناپدید شدن آن‌ها عوض نشود.
-     */
-    private fun availableWindowHeight(context: Context): Int {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-            val metrics = wm.currentWindowMetrics
-            val bars = metrics.windowInsets.getInsets(WindowInsets.Type.systemBars())
-            return metrics.bounds.height() - bars.top - bars.bottom
-        }
-        @Suppress("DEPRECATION")
-        return context.resources.displayMetrics.heightPixels
-    }
 
     data class ColorOption(val nameRes: Int, val hex: String)
 
@@ -84,7 +68,6 @@ object SubtitleStyleManager {
         BgOption(R.string.bg_solid_100, "solid_100")
     )
 
-    /** نمای کامل استایل. مقایسهٔ data class یعنی «آیا چیزی عوض شده؟» */
     private data class Style(
         val size: Int,
         val pos: Int,
@@ -95,8 +78,85 @@ object SubtitleStyleManager {
         val assOverride: Boolean
     )
 
-    /** آخرین استایلی که روی mpv اعمال شده. فقط روی ترد MpvBg تغییر می‌کند */
-    @Volatile private var lastApplied: Style? = null
+    @Volatile
+    private var lastApplied: Style? = null
+
+    /**
+     * محاسبه ارتفاع ثابت صفحه با نادیده گرفتن وضعیت فعلی (مخفی/ظاهر) نوار ژست حرکتی
+     * تا ارتفاع دیالوگ هرگز با ژست‌های حرکتی گوشی کم و زیاد نشود.
+     */
+    fun stableWindowBounds(context: Context): Pair<Int, Int> {
+        val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val metrics = wm.currentWindowMetrics
+            val insets = metrics.windowInsets.getInsetsIgnoringVisibility(
+                WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout()
+            )
+            val w = (metrics.bounds.width() - insets.left - insets.right).coerceAtLeast(320)
+            val h = (metrics.bounds.height() - insets.top - insets.bottom).coerceAtLeast(240)
+            return Pair(w, h)
+        }
+        val dm = context.resources.displayMetrics
+        return Pair(dm.widthPixels, dm.heightPixels)
+    }
+
+    /**
+     * نمایش دیالوگ بدون خروج از حالت تمام‌صفحه (Immersive) و بدون تغییر سایز در اثر ژست‌های حرکتی
+     */
+    fun showImmersiveDialog(context: Context, dialog: AlertDialog, maxHeightRatio: Double = 0.90) {
+        val win: Window? = dialog.window
+        if (win != null) {
+            // جلوگیری از فوکوس‌گیری اولیه که باعث پرش نوار ژست حرکتی می‌شود
+            win.setFlags(
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            )
+            WindowCompat.setDecorFitsSystemWindows(win, false)
+        }
+
+        dialog.show()
+
+        if (win != null) {
+            // همگام‌سازی وضعیت Immersive با اکتیویتی اصلی و بازگرداندن فوکوس برای کارکرد روان دکمه‌ها
+            (context as? Activity)?.window?.decorView?.systemUiVisibility?.let {
+                @Suppress("DEPRECATION")
+                win.decorView.systemUiVisibility = it
+            }
+            val controller = WindowCompat.getInsetsController(win, win.decorView)
+            controller.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+
+            win.clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
+
+            // قفل کردن حداکثر ارتفاع ثابت
+            val (availW, availH) = stableWindowBounds(context)
+            val maxH = (availH * maxHeightRatio).toInt()
+            val maxW = if (availW > availH) (availW * 0.78).toInt().coerceAtMost(dp(context, 600f))
+            else (availW * 0.94).toInt()
+
+            val lp = win.attributes
+            lp.width = maxW
+            lp.height = WindowManager.LayoutParams.WRAP_CONTENT
+            lp.gravity = Gravity.CENTER
+            win.attributes = lp
+
+            win.decorView.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
+                if (v.height > maxH && win.attributes.height != maxH) {
+                    v.post {
+                        val attr = win.attributes
+                        attr.height = maxH
+                        win.attributes = attr
+                    }
+                }
+            }
+        }
+    }
+
+    private fun dp(context: Context, value: Float): Int =
+        TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_DIP, value, context.resources.displayMetrics
+        ).toInt()
 
     private fun readStyle(prefs: SharedPreferences) = Style(
         size = prefs.getInt(PREF_SUB_SIZE, DEFAULT_SIZE).coerceIn(20, 100),
@@ -123,7 +183,6 @@ object SubtitleStyleManager {
     fun applyInitialOptions(context: Context) {
         val s = readStyle(PreferenceManager.getDefaultSharedPreferences(context))
 
-        // مخفی نگه داشتن لایهٔ خام زیرنویس mpv (چون رندر اصلی در SubtitleNormalizer انجام می‌شود)
         MPVLib.setOptionString("sub-font", FontInstaller.FONT_FAMILY)
         MPVLib.setOptionString("sub-color", "0/0/0/0")
         MPVLib.setOptionString("sub-border-color", "0/0/0/0")
@@ -164,13 +223,12 @@ object SubtitleStyleManager {
         }
     }
 
-    /** فقط روی ترد MpvBg اجرا می‌شود */
     private fun applyOnBg(s: Style) {
         val prev = lastApplied
-        if (prev == s) return // هیچ تغییری نیست؛ هیچ کار اضافه‌ای روی mpv نمی‌شود
+        if (prev == s) return
 
         if (prev == null || prev.bgId != s.bgId) {
-            setOsdBox(s.bgId, isInit = false) // کادر OSD فقط وقتی پس‌زمینه عوض شده
+            setOsdBox(s.bgId, isInit = false)
         }
         lastApplied = s
 
@@ -182,7 +240,7 @@ object SubtitleStyleManager {
             colorHex = s.color,
             bgId = s.bgId,
             assOverride = s.assOverride,
-            refreshNow = true // یک رندر؛ داخل صف با کلید norm-sub با رندرهای دیگر یکی می‌شود
+            refreshNow = true
         )
     }
 
@@ -190,21 +248,48 @@ object SubtitleStyleManager {
         MpvBg.postLatest(KEY_STYLE) { applyOnBg(s) }
     }
 
+    @SuppressLint("ClickableViewAccessibility")
+    private fun lockSeekBarTouch(seekBar: SeekBar) {
+        seekBar.setOnTouchListener { v, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE ->
+                    v.parent?.requestDisallowInterceptTouchEvent(true)
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
+                    v.parent?.requestDisallowInterceptTouchEvent(false)
+            }
+            false
+        }
+    }
+
     fun showStyleDialog(context: Context, onDismiss: () -> Unit) {
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
         val view = LayoutInflater.from(context).inflate(R.layout.dialog_subtitle_style, null)
 
-        val txtSubSize = view.findViewById<TextView>(R.id.txtSubSize)
         val scrollSubStyle = view.findViewById<ScrollView>(R.id.scrollSubStyle)
+        val txtSubSize = view.findViewById<TextView>(R.id.txtSubSize)
         val seekSubSize = view.findViewById<SeekBar>(R.id.seekSubSize)
+        val btnSizeMinus = view.findViewById<View>(R.id.btnSizeMinus)
+        val btnSizePlus = view.findViewById<View>(R.id.btnSizePlus)
+
         val txtSubPos = view.findViewById<TextView>(R.id.txtSubPos)
         val seekSubPos = view.findViewById<SeekBar>(R.id.seekSubPos)
+        val btnPosMinus = view.findViewById<View>(R.id.btnPosMinus)
+        val btnPosPlus = view.findViewById<View>(R.id.btnPosPlus)
+
         val txtSubBorder = view.findViewById<TextView>(R.id.txtSubBorder)
         val seekSubBorder = view.findViewById<SeekBar>(R.id.seekSubBorder)
-        val spinnerSubColor = view.findViewById<Spinner>(R.id.spinnerSubColor)
-        val spinnerSubBgColor = view.findViewById<Spinner>(R.id.spinnerSubBgColor)
+        val btnBorderMinus = view.findViewById<View>(R.id.btnBorderMinus)
+        val btnBorderPlus = view.findViewById<View>(R.id.btnBorderPlus)
+
+        val colorChipsContainer = view.findViewById<LinearLayout>(R.id.colorChipsContainer)
+        val bgChipsContainer = view.findViewById<LinearLayout>(R.id.bgChipsContainer)
         val switchSubBold = view.findViewById<SwitchCompat>(R.id.switchSubBold)
         val switchAssOverride = view.findViewById<SwitchCompat>(R.id.switchAssOverride)
+
+        // جلوگیری از سرقت لمس اسلایدرها توسط ScrollView
+        lockSeekBarTouch(seekSubSize)
+        lockSeekBarTouch(seekSubPos)
+        lockSeekBarTouch(seekSubBorder)
 
         val saved = readStyle(prefs)
         var currentSize = saved.size
@@ -214,6 +299,8 @@ object SubtitleStyleManager {
         var currentColor = saved.color
         var currentBgId = saved.bgId
         var currentAssOverride = saved.assOverride
+
+        var updatingUiProgrammatically = false
 
         fun snapshot() = Style(
             currentSize, currentPos, currentBorder, currentBold,
@@ -233,7 +320,6 @@ object SubtitleStyleManager {
             requestApply(snapshot())
         }
 
-        // هنگام کشیدن اسلایدر: حداکثر یک پیش‌نمایش در هر PREVIEW_THROTTLE_MS
         fun schedulePreview() {
             if (!previewQueued) {
                 previewQueued = true
@@ -241,7 +327,6 @@ object SubtitleStyleManager {
             }
         }
 
-        // تغییر قطعی (رها کردن اسلایدر، سوئیچ، اسپینر، ریست، بستن): ذخیره + اعمال
         fun commitNow() {
             if (previewQueued) {
                 handler.removeCallbacks(previewRunnable)
@@ -252,41 +337,120 @@ object SubtitleStyleManager {
             requestApply(s)
         }
 
-        // همگام‌سازی کنترل‌ها با متغیرهای فعلی (اسپینرها باید adapter داشته باشند)
+        // ساخت دایره‌های رنگی تک‌کلیکی (جایگزین سریع و بدون باگ Spinner)
+        val colorViews = mutableListOf<TextView>()
+        fun refreshColorChips() {
+            colorViews.forEachIndexed { idx, tv ->
+                val opt = textColors[idx]
+                val selected = opt.hex.equals(currentColor, ignoreCase = true)
+                val fill = Color.parseColor(opt.hex)
+                tv.background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(fill)
+                    setStroke(
+                        dp(context, if (selected) 3f else 1f),
+                        if (selected) Color.WHITE else Color.parseColor("#66FFFFFF")
+                    )
+                }
+                tv.text = if (selected) "✓" else ""
+                tv.scaleX = if (selected) 1.12f else 1.0f
+                tv.scaleY = if (selected) 1.12f else 1.0f
+            }
+        }
+
+        val chipSize = dp(context, 34f)
+        val chipMargin = dp(context, 5f)
+        textColors.forEach { opt ->
+            val tv = TextView(context).apply {
+                layoutParams = LinearLayout.LayoutParams(chipSize, chipSize).apply {
+                    marginEnd = chipMargin
+                    marginStart = chipMargin
+                }
+                gravity = Gravity.CENTER
+                setTextColor(Color.BLACK)
+                textSize = 15f
+                paint.isFakeBoldText = true
+                contentDescription = context.getString(opt.nameRes)
+                setOnClickListener {
+                    if (!opt.hex.equals(currentColor, ignoreCase = true)) {
+                        currentColor = opt.hex
+                        refreshColorChips()
+                        commitNow()
+                    }
+                }
+            }
+            colorViews.add(tv)
+            colorChipsContainer.addView(tv)
+        }
+
+        // ساخت دکمه‌های انتخاب کادر پس‌زمینه (تک‌کلیکی بدون باز کردن منوی کشویی)
+        val bgViews = mutableListOf<TextView>()
+        fun refreshBgChips() {
+            bgViews.forEachIndexed { idx, tv ->
+                val opt = bgOptions[idx]
+                val selected = opt.id == currentBgId
+                tv.background = GradientDrawable().apply {
+                    shape = GradientDrawable.RECTANGLE
+                    cornerRadius = dp(context, 8f).toFloat()
+                    setColor(
+                        if (selected) Color.parseColor("#7E57C2")
+                        else Color.parseColor("#2AFFFFFF")
+                    )
+                    setStroke(
+                        dp(context, 1f),
+                        if (selected) Color.WHITE else Color.parseColor("#40FFFFFF")
+                    )
+                }
+                tv.setTextColor(if (selected) Color.WHITE else Color.parseColor("#D0FFFFFF"))
+                tv.paint.isFakeBoldText = selected
+            }
+        }
+
+        bgOptions.forEach { opt ->
+            val tv = TextView(context).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    0, dp(context, 36f), 1f
+                ).apply {
+                    marginStart = dp(context, 3f)
+                    marginEnd = dp(context, 3f)
+                }
+                gravity = Gravity.CENTER
+                text = context.getString(opt.nameRes)
+                textSize = 11.5f
+                maxLines = 1
+                setPadding(dp(context, 4f), 0, dp(context, 4f), 0)
+                setOnClickListener {
+                    if (opt.id != currentBgId) {
+                        currentBgId = opt.id
+                        refreshBgChips()
+                        commitNow()
+                    }
+                }
+            }
+            bgViews.add(tv)
+            bgChipsContainer.addView(tv)
+        }
+
         fun syncControls() {
+            updatingUiProgrammatically = true
             seekSubSize.progress = (currentSize - 20).coerceIn(0, 80)
             seekSubPos.progress = currentPos.coerceIn(0, 100)
             seekSubBorder.progress = (currentBorder * 10).toInt().coerceIn(0, 60)
             switchSubBold.isChecked = currentBold
             switchAssOverride.isChecked = currentAssOverride
-            spinnerSubColor.setSelection(
-                textColors.indexOfFirst { it.hex.equals(currentColor, true) }.coerceAtLeast(0)
-            )
-            spinnerSubBgColor.setSelection(
-                bgOptions.indexOfFirst { it.id == currentBgId }.coerceAtLeast(0)
-            )
+            refreshColorChips()
+            refreshBgChips()
+            updatingUiProgrammatically = false
         }
 
-        // پیش‌نمایش زنده فعال؛ این تنها رندر باز شدن دیالوگ است (اعمال اضافه‌ای نیست)
         SubtitleNormalizer.setPreviewMode(true)
-
-        spinnerSubColor.adapter = ArrayAdapter(
-            context,
-            android.R.layout.simple_spinner_dropdown_item,
-            textColors.map { context.getString(it.nameRes) }
-        )
-        spinnerSubBgColor.adapter = ArrayAdapter(
-            context,
-            android.R.layout.simple_spinner_dropdown_item,
-            bgOptions.map { context.getString(it.nameRes) }
-        )
-
         updateLabels()
-        syncControls() // کال‌بک اولیهٔ اسپینرها بعد از layout می‌آید و با گارد «مقدار یکسان» نادیده گرفته می‌شود
+        syncControls()
 
+        // اسلایدرها + دکمه‌های کمکی - و +
         seekSubSize.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                if (!fromUser) return
+                if (!fromUser || updatingUiProgrammatically) return
                 currentSize = 20 + progress
                 updateLabels()
                 schedulePreview()
@@ -294,10 +458,18 @@ object SubtitleStyleManager {
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) { commitNow() }
         })
+        btnSizeMinus.setOnClickListener {
+            currentSize = (currentSize - 2).coerceIn(20, 100)
+            syncControls(); updateLabels(); commitNow()
+        }
+        btnSizePlus.setOnClickListener {
+            currentSize = (currentSize + 2).coerceIn(20, 100)
+            syncControls(); updateLabels(); commitNow()
+        }
 
         seekSubPos.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                if (!fromUser) return
+                if (!fromUser || updatingUiProgrammatically) return
                 currentPos = progress
                 updateLabels()
                 schedulePreview()
@@ -305,10 +477,18 @@ object SubtitleStyleManager {
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) { commitNow() }
         })
+        btnPosMinus.setOnClickListener {
+            currentPos = (currentPos - 2).coerceIn(0, 100)
+            syncControls(); updateLabels(); commitNow()
+        }
+        btnPosPlus.setOnClickListener {
+            currentPos = (currentPos + 2).coerceIn(0, 100)
+            syncControls(); updateLabels(); commitNow()
+        }
 
         seekSubBorder.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                if (!fromUser) return
+                if (!fromUser || updatingUiProgrammatically) return
                 currentBorder = progress / 10.0
                 updateLabels()
                 schedulePreview()
@@ -316,79 +496,59 @@ object SubtitleStyleManager {
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) { commitNow() }
         })
-
-        spinnerSubColor.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
-                val hex = textColors[position].hex
-                // اندروید هنگام اولین layout همین کال‌بک را با مقدار فعلی صدا می‌زند؛ آن را نادیده بگیر
-                if (hex.equals(currentColor, true)) return
-                currentColor = hex
-                commitNow()
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        btnBorderMinus.setOnClickListener {
+            currentBorder = ((currentBorder * 10).toInt() - 5).coerceIn(0, 60) / 10.0
+            syncControls(); updateLabels(); commitNow()
         }
-
-        spinnerSubBgColor.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
-                val id2 = bgOptions[position].id
-                if (id2 == currentBgId) return
-                currentBgId = id2
-                commitNow()
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        btnBorderPlus.setOnClickListener {
+            currentBorder = ((currentBorder * 10).toInt() + 5).coerceIn(0, 60) / 10.0
+            syncControls(); updateLabels(); commitNow()
         }
 
         switchSubBold.setOnCheckedChangeListener { _, isChecked ->
-            if (isChecked == currentBold) return@setOnCheckedChangeListener
+            if (updatingUiProgrammatically || isChecked == currentBold) return@setOnCheckedChangeListener
             currentBold = isChecked
             commitNow()
         }
 
         switchAssOverride.setOnCheckedChangeListener { _, isChecked ->
-            if (isChecked == currentAssOverride) return@setOnCheckedChangeListener
+            if (updatingUiProgrammatically || isChecked == currentAssOverride) return@setOnCheckedChangeListener
             currentAssOverride = isChecked
             commitNow()
         }
 
-        AlertDialog.Builder(context)
+        val alertDialog = AlertDialog.Builder(context)
             .setTitle(R.string.subtitle_style_title)
             .setView(view)
             .setPositiveButton(R.string.dialog_ok) { dialog, _ -> dialog.dismiss() }
-            .setNeutralButton(R.string.dialog_reset) { _, _ ->
-                currentSize = DEFAULT_SIZE
-                currentPos = DEFAULT_POS
-                currentBorder = DEFAULT_BORDER
-                currentBold = DEFAULT_BOLD
-                currentColor = DEFAULT_COLOR
-                currentBgId = DEFAULT_BG_COLOR
-                currentAssOverride = DEFAULT_ASS_OVERRIDE
-                syncControls()
-                updateLabels()
-                commitNow()
-            }
+            .setNeutralButton(R.string.dialog_reset, null) // جلوگیری از بسته شدن خودکار دیالوگ هنگام ریست
             .setOnDismissListener {
-                commitNow()
+                handler.removeCallbacks(previewRunnable)
+                previewQueued = false
+                val finalStyle = snapshot()
+                saveStyle(prefs, finalStyle)
+                requestApply(finalStyle)
                 SubtitleNormalizer.setPreviewMode(false)
                 onDismiss()
             }
             .create()
-            .also { alertDialog ->
-                alertDialog.show()
-                // همیشه از بالای منو شروع شود (گاهی فوکوس روی اسپینر، اسکرول را پایین می‌برد)
-                scrollSubStyle.post { scrollSubStyle.scrollTo(0, 0) }
-                // در حالت افقی، دیالوگ از صفحه بلندتر می‌شود و دکمه‌ها می‌افتند بیرون؛
-                // ارتفاع پنجره را (بدون احتساب دکمه هوم/ناوبری) محدود کن تا دکمه‌ها دیده شوند
-                alertDialog.window?.decorView?.post {
-                    val win = alertDialog.window ?: return@post
-                    val decorH = win.decorView.height
-                    val maxH = (availableWindowHeight(context) * 0.88).toInt()
-                    if (decorH > maxH) {
-                        val lp = win.attributes
-                        lp.height = maxH
-                        lp.gravity = Gravity.CENTER
-                        win.attributes = lp
-                    }
-                }
-            }
+
+        showImmersiveDialog(context, alertDialog, maxHeightRatio = 0.90)
+
+        // بازنشانی درجا بدون بستن دیالوگ
+        alertDialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.setOnClickListener {
+            currentSize = DEFAULT_SIZE
+            currentPos = DEFAULT_POS
+            currentBorder = DEFAULT_BORDER
+            currentBold = DEFAULT_BOLD
+            currentColor = DEFAULT_COLOR
+            currentBgId = DEFAULT_BG_COLOR
+            currentAssOverride = DEFAULT_ASS_OVERRIDE
+            syncControls()
+            updateLabels()
+            commitNow()
+        }
+
+        scrollSubStyle.post { scrollSubStyle.scrollTo(0, 0) }
     }
 }

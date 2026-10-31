@@ -2,29 +2,59 @@
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:verticalScrollbarPosition="left"
-    android:paddingHorizontal="20dp"
-    android:paddingVertical="12dp">
+    android:fadeScrollbars="false"
+    android:overScrollMode="never"
+    android:paddingHorizontal="18dp"
+    android:paddingTop="8dp"
+    android:paddingBottom="4dp"
+    android:verticalScrollbarPosition="left">
 
+    <!-- focusableInTouchMode مانع از فوکوس خودکار EditText و باز شدن ناخواسته کیبورد در لحظه باز شدن منو می‌شود -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
         android:orientation="vertical">
 
         <androidx.appcompat.widget.SwitchCompat
             android:id="@+id/switchSkipEnabled"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="8dp"
+            android:layout_height="40dp"
+            android:layout_marginBottom="6dp"
             android:checked="true"
+            android:focusable="false"
             android:text="@string/skip_enabled"
             android:textStyle="bold" />
 
-        <TextView
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginBottom="4dp"
-            android:text="@string/skip_hint_label" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/skip_hint_label"
+                android:textSize="12.5sp" />
+
+            <TextView
+                android:id="@+id/btnInsertCurrentTime"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:background="?selectableItemBackground"
+                android:clickable="true"
+                android:focusable="false"
+                android:gravity="center"
+                android:paddingHorizontal="10dp"
+                android:text="+ زمان فعلی"
+                android:textColor="#B388FF"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+        </LinearLayout>
 
         <EditText
             android:id="@+id/editSkipRanges"
@@ -32,40 +62,45 @@
             android:layout_height="wrap_content"
             android:fontFamily="monospace"
             android:gravity="top|start"
-            android:hint="00:00:00-00:30:30,+00:31:15-00:31:30"
+            android:hint="00:00:00-00:30:30, 00:31:15-00:31:30"
+            android:imeOptions="actionDone|flagNoExtractUi"
             android:inputType="textMultiLine|textNoSuggestions"
             android:layoutDirection="ltr"
-            android:maxLines="4"
+            android:maxLines="3"
             android:minLines="2"
             android:scrollbars="vertical"
             android:textDirection="ltr"
-            android:textSize="14sp" />
+            android:textSize="13.5sp" />
 
         <RadioGroup
             android:id="@+id/radioGroupSkipMode"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp">
+            android:layout_marginTop="4dp">
 
             <RadioButton
                 android:id="@+id/radioSkipInside"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
+                android:layout_height="38dp"
                 android:checked="true"
-                android:text="@string/skip_mode_inside" />
+                android:focusable="false"
+                android:text="@string/skip_mode_inside"
+                android:textSize="13sp" />
 
             <RadioButton
                 android:id="@+id/radioKeepOnly"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/skip_mode_keep" />
+                android:layout_height="38dp"
+                android:focusable="false"
+                android:text="@string/skip_mode_keep"
+                android:textSize="13sp" />
         </RadioGroup>
 
         <TextView
             android:id="@+id/txtSkipStatus"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="4dp"
             android:textSize="12sp" />
 
     </LinearLayout>
