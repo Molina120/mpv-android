@@ -80,6 +80,7 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
 
     private var audioManager: AudioManager? = null
     private var volumeHideRunnable: Runnable? = null
+    private var justShowedControls = false
     private var audioFocusRequest: AudioFocusRequestCompat? = null
     private var audioFocusRestore: () -> Unit = {}
 
@@ -1031,6 +1032,11 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             }
             KeyEvent.KEYCODE_NUMPAD_ENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_CENTER -> {
                 if (ev.action == KeyEvent.ACTION_UP) {
+                    // Skip click if this UP belongs to the OK press that just showed controls
+                    if (justShowedControls) {
+                        justShowedControls = false
+                        return true
+                    }
                     val view = dpadButtons().elementAtOrNull(btnSelected)
                     // 500ms appears to be the standard
                     if (ev.eventTime - ev.downTime > 500L)
@@ -1090,7 +1096,16 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             KeyEvent.KEYCODE_GUIDE -> openTopMenu()
             KeyEvent.KEYCODE_NUMPAD_ENTER, KeyEvent.KEYCODE_DPAD_CENTER -> {
                 // روی تلویزیون: OK ابزارها را نشان می‌دهد، نه توقف/پخش
-                if (Utils.isTv(this)) toggleControls() else player.cyclePause()
+                if (Utils.isTv(this)) {
+                    val shown = toggleControls()
+                    // Activate D-pad navigation (blue focus) when controls are shown
+                    // Flag prevents the UP of this same press from clicking the button
+                    if (shown && btnSelected == -1) {
+                        btnSelected = 0
+                        updateSelectedDpadButton()
+                        justShowedControls = true
+                    }
+                } else player.cyclePause()
             }
 
             // (overrides a default binding)
