@@ -1025,12 +1025,8 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             view.isSelected = selected
             if (selected) {
                 view.setBackgroundResource(R.drawable.item_focus_selector)
-                view.scaleX = 1.18f
-                view.scaleY = 1.18f
             } else {
                 view.background = null
-                view.scaleX = 1.0f
-                view.scaleY = 1.0f
             }
         }
     }
@@ -1534,10 +1530,7 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             buttonView.isFocusableInTouchMode = false
             buttonView.setBackgroundResource(R.drawable.item_focus_selector)
             buttonView.setTextColor(Color.parseColor("#FFFFFF"))
-            buttonView.setOnFocusChangeListener { v, hasFocus ->
-                val scale = if (hasFocus) 1.05f else 1.0f
-                v.animate().scaleX(scale).scaleY(scale).setDuration(120).start()
-            }
+            // No scale animation - just the blue border, to avoid frame clipping at dialog edges
             if (firstFocusableBtn == null && buttonView.visibility == View.VISIBLE) {
                 firstFocusableBtn = buttonView
             }

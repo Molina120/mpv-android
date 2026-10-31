@@ -35,7 +35,7 @@
     </style>
 
     <!-- theme for preferences -->
-    <style name="AppTheme.Preference" parent="Theme.Material3.DayNight">
+    <style name="AppTheme.Preference" parent="Theme.Material3.Dark.NoActionBar">
         <item name="toolbarStyle">@style/AppTheme.Toolbar.Style</item>
         <item name="alertDialogTheme">@style/AppTheme.Preference.AlertDialog</item>
     </style>

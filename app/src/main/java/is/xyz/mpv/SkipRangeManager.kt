@@ -202,6 +202,18 @@ object SkipRangeManager {
         val txtSkipStatus = view.findViewById<TextView>(R.id.txtSkipStatus)
 
         switchSkipEnabled.isChecked = cfg.isEnabled
+        switchSkipEnabled.isFocusable = true
+        switchSkipEnabled.isClickable = true
+        // D-pad CENTER toggles the switch
+        switchSkipEnabled.setOnKeyListener { v, keyCode, event ->
+            if (event.action == android.view.KeyEvent.ACTION_DOWN &&
+                (keyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER ||
+                 keyCode == android.view.KeyEvent.KEYCODE_ENTER)) {
+                (v as androidx.appcompat.widget.SwitchCompat).toggle()
+                return@setOnKeyListener true
+            }
+            false
+        }
         editSkipRanges.setText(cfg.rawInputText)
         if (cfg.mode == SkipMode.SKIP_SPECIFIED_RANGES) {
             radioSkipInside.isChecked = true
