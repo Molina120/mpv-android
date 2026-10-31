@@ -365,7 +365,7 @@ object SubtitleStyleManager {
                 }
                 isFocusable = true
                 isFocusableInTouchMode = true
-                setBackgroundResource(R.drawable.tv_button_selector)
+                foreground = context.getDrawable(R.drawable.tv_button_selector)
                 gravity = Gravity.CENTER
                 setTextColor(Color.BLACK)
                 textSize = 15f
@@ -418,7 +418,7 @@ object SubtitleStyleManager {
                 }
                 isFocusable = true
                 isFocusableInTouchMode = true
-                setBackgroundResource(R.drawable.tv_button_selector)
+                foreground = context.getDrawable(R.drawable.tv_button_selector)
                 gravity = Gravity.CENTER
                 text = context.getString(opt.nameRes)
                 textSize = 11.5f

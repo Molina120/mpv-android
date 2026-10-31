@@ -937,12 +937,36 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         }
 
         // this runs when dpad navigation is active:
+        // ناوبری دو‌بعدی: بالا/پایین بین ردیف‌ها، چپ/راست داخل ردیف
         when (ev.keyCode) {
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
-                if (ev.action == KeyEvent.ACTION_DOWN) { // deactivate dpad navigation
-                    btnSelected = -1
-                    updateSelectedDpadButton()
-                    hideControlsFade()
+                if (ev.action == KeyEvent.ACTION_DOWN) {
+                    val buttons = dpadButtons().toList()
+                    val bottomCount = binding.controlsButtonGroup.childCount.let { c ->
+                        (0 until c).count { binding.controlsButtonGroup.getChildAt(it).isFocusable }
+                    }
+                    val inBottomRow = btnSelected < bottomCount
+                    if (ev.keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                        if (inBottomRow) {
+                            // از ردیف پایین به ردیف بالا (تنظیمات)
+                            btnSelected = bottomCount.coerceAtMost(buttons.size - 1)
+                            updateSelectedDpadButton()
+                        } else {
+                            btnSelected = -1
+                            updateSelectedDpadButton()
+                            hideControlsFade()
+                        }
+                    } else { // DOWN
+                        if (!inBottomRow) {
+                            // از ردیف بالا به ردیف پایین
+                            btnSelected = 0
+                            updateSelectedDpadButton()
+                        } else {
+                            btnSelected = -1
+                            updateSelectedDpadButton()
+                            hideControlsFade()
+                        }
+                    }
                 }
                 return true
             }
