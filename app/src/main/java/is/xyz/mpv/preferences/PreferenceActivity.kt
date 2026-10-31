@@ -110,7 +110,7 @@ class PreferenceActivity : AppCompatActivity(),
     // ذخیره موقعیت اسکرول برای برگشت سر جایش
     private val scrollStates = mutableMapOf<String, android.os.Parcelable?>()
 
-    open class BasePrefFragment : PreferenceFragmentCompat() {
+    abstract class BasePrefFragment : PreferenceFragmentCompat() {
         private var savedScroll: android.os.Parcelable? = null
 
         override fun onPause() {
