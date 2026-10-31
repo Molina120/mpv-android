@@ -8,6 +8,11 @@
         app:actionViewClass="androidx.appcompat.widget.SearchView"
         app:showAsAction="ifRoom|collapseActionView" />
     <item
+        android:id="@+id/menu_last_video"
+        android:icon="@drawable/ic_play_arrow_white_24dp"
+        android:title="@string/last_video"
+        app:showAsAction="ifRoom" />
+    <item
         android:id="@+id/menu_refresh"
         android:icon="@drawable/ic_sd_card_white_24dp"
         android:title="@string/browser_refresh" />

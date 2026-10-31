@@ -11,6 +11,7 @@ import android.app.PictureInPictureParams
 import android.app.RemoteAction
 import android.content.BroadcastReceiver
 import android.content.Context
+import android.graphics.Color
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ActivityInfo
@@ -1001,14 +1002,11 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
     }
 
     private fun updateSelectedDpadButton() {
-        val colorFocused = ContextCompat.getColor(this, R.color.tint_btn_bg_focused)
-        val colorNoFocus = ContextCompat.getColor(this, R.color.tint_btn_bg_nofocus)
-
         dpadButtons().forEachIndexed { i, child ->
             if (i == btnSelected)
-                child.setBackgroundColor(colorFocused)
+                child.setBackgroundResource(R.drawable.tv_button_selector)
             else
-                child.setBackgroundColor(colorNoFocus)
+                child.setBackgroundColor(Color.TRANSPARENT)
         }
     }
 

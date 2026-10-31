@@ -107,7 +107,35 @@ class PreferenceActivity : AppCompatActivity(),
      * The root preference fragment that displays preferences that link to the other preference
      * fragments below.
      */
-    class SettingsFragment : PreferenceFragmentCompat() {
+    // ذخیره موقعیت اسکرول برای برگشت سر جایش
+    private val scrollStates = mutableMapOf<String, android.os.Parcelable?>()
+
+    open class BasePrefFragment : PreferenceFragmentCompat() {
+        private var savedScroll: android.os.Parcelable? = null
+
+        override fun onPause() {
+            super.onPause()
+            // ذخیره موقعیت اسکرول
+            view?.findViewById<androidx.recyclerview.widget.RecyclerView>(
+                androidx.preference.R.id.recycler_view
+            )?.layoutManager?.onSaveInstanceState()?.let {
+                (activity as? PreferenceActivity)?.scrollStates?.put(this::class.java.name, it)
+            }
+        }
+
+        override fun onResume() {
+            super.onResume()
+            // بازیابی موقعیت اسکرول
+            val state = (activity as? PreferenceActivity)?.scrollStates?.get(this::class.java.name)
+            if (state != null) {
+                view?.findViewById<androidx.recyclerview.widget.RecyclerView>(
+                    androidx.preference.R.id.recycler_view
+                )?.layoutManager?.onRestoreInstanceState(state)
+            }
+        }
+    }
+
+    class SettingsFragment : BasePrefFragment() {
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
             setPreferencesFromResource(R.xml.preferences_root, rootKey)
 
@@ -123,7 +151,7 @@ class PreferenceActivity : AppCompatActivity(),
         }
     }
 
-    class GeneralPreference : PreferenceFragmentCompat() {
+    class GeneralPreference : BasePrefFragment() {
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
             setPreferencesFromResource(R.xml.pref_general, rootKey)
             // hide Material You on Android 11 or lower
@@ -132,13 +160,13 @@ class PreferenceActivity : AppCompatActivity(),
         }
     }
 
-    class VideoPreference : PreferenceFragmentCompat() {
+    class VideoPreference : BasePrefFragment() {
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
             setPreferencesFromResource(R.xml.pref_video, rootKey)
         }
     }
 
-    class UIPreference : PreferenceFragmentCompat() {
+    class UIPreference : BasePrefFragment() {
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
             setPreferencesFromResource(R.xml.pref_ui, rootKey)
             val packageManager = requireContext().packageManager
@@ -147,7 +175,7 @@ class PreferenceActivity : AppCompatActivity(),
         }
     }
 
-    class GesturePreference : PreferenceFragmentCompat() {
+    class GesturePreference : BasePrefFragment() {
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
             setPreferencesFromResource(R.xml.pref_gestures, rootKey)
             val packageManager = requireContext().packageManager
@@ -158,13 +186,13 @@ class PreferenceActivity : AppCompatActivity(),
         }
     }
 
-    class DeveloperPreference : PreferenceFragmentCompat() {
+    class DeveloperPreference : BasePrefFragment() {
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
             setPreferencesFromResource(R.xml.pref_developer, rootKey)
         }
     }
 
-    class AdvancePreference : PreferenceFragmentCompat() {
+    class AdvancePreference : BasePrefFragment() {
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
             setPreferencesFromResource(R.xml.pref_advanced, rootKey)
         }
