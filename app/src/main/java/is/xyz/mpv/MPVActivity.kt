@@ -412,7 +412,8 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         stopServiceRunnable.run()
 
         player.removeObserver(this)
-        player.destroy()
+        // تخریب mpv روی ترد پس‌زمینه تا خروج روی تلویزیون فریز نشود
+        MpvBg.post { player.destroy() }
         super.onDestroy()
     }
 
@@ -1010,7 +1011,10 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             KeyEvent.KEYCODE_INFO -> toggleControls()
             KeyEvent.KEYCODE_MENU -> openTopMenu()
             KeyEvent.KEYCODE_GUIDE -> openTopMenu()
-            KeyEvent.KEYCODE_NUMPAD_ENTER, KeyEvent.KEYCODE_DPAD_CENTER -> player.cyclePause()
+            KeyEvent.KEYCODE_NUMPAD_ENTER, KeyEvent.KEYCODE_DPAD_CENTER -> {
+                // روی تلویزیون: OK ابزارها را نشان می‌دهد، نه توقف/پخش
+                if (Utils.isTv(this)) toggleControls() else player.cyclePause()
+            }
 
             // (overrides a default binding)
             KeyEvent.KEYCODE_ENTER -> player.cyclePause()
@@ -1417,7 +1421,8 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         val selectedIndex = items.indexOfFirst { it.second == hwdecActive }
         with (AlertDialog.Builder(this)) {
             setSingleChoiceItems(items.map { it.first }.toTypedArray(), selectedIndex ) { dialog, idx ->
-                MPVLib.setPropertyString("hwdec", items[idx].second)
+                // تغییر دیکدر روی ترد پس‌زمینه تا روی دستگاه‌های ضعیف (تلویزیون) فریز نشود
+                MpvBg.post { MPVLib.setPropertyString("hwdec", items[idx].second) }
                 dialog.dismiss()
             }
             setOnDismissListener { restore() }
