@@ -365,13 +365,7 @@ object SubtitleStyleManager {
                 }
                 isFocusable = true
                 isFocusableInTouchMode = true
-                foreground = run {
-                    val tv2 = android.util.TypedValue()
-                    if (context.theme.resolveAttribute(
-                            androidx.appcompat.R.attr.selectableItemBackgroundBorderless, tv2, true))
-                        androidx.appcompat.content.res.AppCompatResources.getDrawable(context, tv2.resourceId)
-                    else null
-                }
+                foreground = context.getDrawable(R.drawable.item_focus_selector)
                 gravity = Gravity.CENTER
                 setTextColor(Color.BLACK)
                 textSize = 15f
@@ -424,13 +418,7 @@ object SubtitleStyleManager {
                 }
                 isFocusable = true
                 isFocusableInTouchMode = true
-                foreground = run {
-                    val tv2 = android.util.TypedValue()
-                    if (context.theme.resolveAttribute(
-                            androidx.appcompat.R.attr.selectableItemBackgroundBorderless, tv2, true))
-                        androidx.appcompat.content.res.AppCompatResources.getDrawable(context, tv2.resourceId)
-                    else null
-                }
+                foreground = context.getDrawable(R.drawable.item_focus_selector)
                 gravity = Gravity.CENTER
                 text = context.getString(opt.nameRes)
                 textSize = 11.5f
