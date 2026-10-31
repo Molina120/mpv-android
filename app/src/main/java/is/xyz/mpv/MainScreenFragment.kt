@@ -384,14 +384,25 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         lastPlayedId = WatchTracker.lastPlayedId(ctx)
         newVideoIds = WatchTracker.getNewIds(ctx)
         updateFab()
+        // ذخیره موقعیت اسکرول قبل از رفرش تا بعد از برگشت از پخش، لیست سر جایش بماند
+        val layoutManager = binding.videoList.layoutManager as? androidx.recyclerview.widget.LinearLayoutManager
+        val firstVisible = layoutManager?.findFirstVisibleItemPosition()
+            ?: androidx.recyclerview.widget.RecyclerView.NO_POSITION
+        val topOffset = if (firstVisible != androidx.recyclerview.widget.RecyclerView.NO_POSITION) {
+            layoutManager?.findViewByPosition(firstVisible)?.top ?: 0
+        } else 0
         // رفرش کامل لیست برای اطمینان از نمایش وضعیت به‌روز (به‌جای فقط notifyDataSetChanged)
         if (openFolder != null) {
             val updated = folders.find { it.name == openFolder!!.name }
-            if (updated != null) showVideos(updated) else showFolders()
+            if (updated != null) showVideos(updated, preserveScroll = true) else showFolders(preserveScroll = true)
         } else {
             // فقط اگر لیست خالی نیست، دوباره نمایش بده تا اسکرول به‌هم نریزد
-            if (folders.isNotEmpty()) showFolders()
+            if (folders.isNotEmpty()) showFolders(preserveScroll = true)
             else (binding.videoList.adapter as? BrowserAdapter)?.notifyDataSetChanged()
+        }
+        // بازگرداندن موقعیت اسکرول
+        if (firstVisible != androidx.recyclerview.widget.RecyclerView.NO_POSITION && firstVisible > 0) {
+            layoutManager?.scrollToPositionWithOffset(firstVisible, topOffset)
         }
     }
 
@@ -1290,7 +1301,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         }
     }
 
-    private fun showFolders() {
+    private fun showFolders(preserveScroll: Boolean = false) {
         openFolder = null
         updateBackCallback()
         binding.toolbar.navigationIcon = null
@@ -1312,12 +1323,13 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             binding.emptyView.isVisible = list.isEmpty()
         }
         // هنگام تایپ در سرچ، فوکوس از روی کیبورد و کرسر برداشته نشود
-        if (searchMenuItem?.isActionViewExpanded != true) {
+        // هنگام رفرش بعد از برگشت از پخش، اسکرول حفظ می‌شود
+        if (searchMenuItem?.isActionViewExpanded != true && !preserveScroll) {
             binding.videoList.scrollToPosition(0)
         }
     }
 
-    private fun showVideos(folder: VideoScanner.Folder) {
+    private fun showVideos(folder: VideoScanner.Folder, preserveScroll: Boolean = false) {
         openFolder = folder
         updateBackCallback()
         binding.toolbar.title = folder.name
@@ -1332,7 +1344,8 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         adapter.items = list.map { BrowserItem.VideoRow(it) }
         binding.emptyView.isVisible = list.isEmpty()
         // هنگام تایپ در سرچ، فوکوس از روی کیبورد و کرسر برداشته نشود
-        if (searchMenuItem?.isActionViewExpanded != true) {
+        // هنگام رفرش بعد از برگشت از پخش، اسکرول حفظ می‌شود
+        if (searchMenuItem?.isActionViewExpanded != true && !preserveScroll) {
             binding.videoList.scrollToPosition(0)
         }
     }
