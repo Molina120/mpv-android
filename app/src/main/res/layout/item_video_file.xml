@@ -4,8 +4,6 @@
     android:layout_height="wrap_content"
     android:gravity="center_vertical"
     android:orientation="horizontal"
-    android:focusable="true"
-    android:focusableInTouchMode="true"
     
     android:paddingHorizontal="12dp"
     android:paddingVertical="8dp">

@@ -474,9 +474,14 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
 
         inner class FolderVH(v: View) : RecyclerView.ViewHolder(v) {
             init {
-                // Blue focus reflection only on TV, not mobile
+                // TV: focusable for D-pad + blue reflection; Mobile: not focusable (single tap)
                 if (Utils.isTv(v.context)) {
                     v.setBackgroundResource(R.drawable.item_focus_selector)
+                    v.isFocusable = true
+                    v.isFocusableInTouchMode = true
+                } else {
+                    v.isFocusable = false
+                    v.isFocusableInTouchMode = false
                 }
             }
             private val name: TextView = v.findViewById(R.id.folderName)
@@ -513,9 +518,14 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
 
         inner class VideoVH(v: View) : RecyclerView.ViewHolder(v) {
             init {
-                // Blue focus reflection only on TV, not mobile
+                // TV: focusable for D-pad + blue reflection; Mobile: not focusable (single tap)
                 if (Utils.isTv(v.context)) {
                     v.setBackgroundResource(R.drawable.item_focus_selector)
+                    v.isFocusable = true
+                    v.isFocusableInTouchMode = true
+                } else {
+                    v.isFocusable = false
+                    v.isFocusableInTouchMode = false
                 }
             }
             private val thumb: ImageView = v.findViewById(R.id.videoThumb)
