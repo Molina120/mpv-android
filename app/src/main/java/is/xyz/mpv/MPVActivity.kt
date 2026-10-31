@@ -411,6 +411,11 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
     override fun onNewIntent(intent: Intent?) {
         Log.v(TAG, "onNewIntent($intent)")
         super.onNewIntent(intent)
+
+        // ۱. ابتدا وضعیت ویدیوی در حال پخش قبلی را ذخیره کن (قبل از تغییر intentVideoId!)
+        // چون دستور loadfile باعث بسته شدن فایل قبلی و صدور END_FILE می‌شود
+        saveWatchState()
+
         // به‌روزرسانی اینتنت اکتیویتی تا extras جدید (resume_position_ms، video_display_name) خوانده شوند
         setIntent(intent)
 
@@ -421,13 +426,13 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             return
         }
 
-        // موقعیت ادامه پخش را از اینتنت جدید بخوان (مثلاً ۰ برای «از اول»)
+        // ۲. ریست کامل متغیرها برای ویدیوی جدید
         pendingResumeMs = intent.getLongExtra("resume_position_ms", 0L)
         intentVideoId = WatchTracker.videoIdFromIntent(intent)
-        // ریست مقادیر ردیابی وضعیت برای ویدیوی جدید
         lastKnownPosMs = 0L
         lastKnownDurMs = 0L
         playbackReachedEof = false
+        playbackHasStarted = false
 
         if (!activityIsForeground && didResumeBackgroundPlayback) {
             if (this.newIntentReplace) {
@@ -2335,6 +2340,8 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
      * ذخیره وضعیت تماشا هنگام توقف/خروج از پخش (برای «ادامه پخش» در مرورگر).
      * وقتی فایل به انتها می‌رسد (END_FILE)، مقادیر timePos و eof-reached در mpv صفر/پاک
      * می‌شوند؛ برای همین آخرین موقعیت و مدت معتبر را نگه می‌داریم.
+     * نکته: END_FILE فقط به معنی رسیدن به انتها نیست (بستن پلیر هم آن را صادر می‌کند)،
+     * پس EOF فقط زمانی true است که واقعاً به ۹۲٪ رسیده باشیم یا mpv صراحتاً eof-reached بگوید.
      */
     private fun saveWatchState(forceEof: Boolean = false) {
         val vid = intentVideoId ?: return
@@ -2347,14 +2354,13 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             val currentDurMs = maxOf(psc.duration, propDurMs, intentDurMs, 0L)
             if (currentDurMs > 0L) lastKnownDurMs = currentDurMs
 
-            val eof = forceEof ||
-                    playbackReachedEof ||
-                    MPVLib.getPropertyBoolean("eof-reached") == true ||
-                    MPVLib.getPropertyBoolean("core-idle") == true &&
-                    lastKnownDurMs > 0L && lastKnownPosMs >= (lastKnownDurMs * 0.92).toLong()
-
             val finalPosMs = if (currentPosMs > 0L) currentPosMs else lastKnownPosMs
             val finalDurMs = if (currentDurMs > 0L) currentDurMs else lastKnownDurMs
+
+            // فقط زمانی EOF محسوب شود که واقعاً به ۹۲٪ زمان رسیده باشد یا mpv صراحتاً در حالت eof-reached باشد
+            val reachedThreshold = finalDurMs > 0L && finalPosMs >= (finalDurMs * 0.92).toLong()
+            val mpvEof = MPVLib.getPropertyBoolean("eof-reached") == true
+            val eof = playbackReachedEof || mpvEof || reachedThreshold || (forceEof && reachedThreshold)
 
             if (finalPosMs > 0L || eof || playbackHasStarted) {
                 WatchTracker.onPlaybackStopped(
@@ -2374,9 +2380,13 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         if (eventId == MpvEvent.MPV_EVENT_END_FILE) {
             psc.eof()
             updateMediaSession()
-            // ثبت اتمام ویدیو: در این لحظه timePos در mpv صفر می‌شود، پس با forceEof ذخیره می‌کنیم
-            playbackReachedEof = true
-            saveWatchState(forceEof = true)
+            // دقت: END_FILE هنگام بستن عادی پلیر هم صدا زده می‌شود!
+            // فقط اگر واقعاً در انتهای فایل بودیم، playbackReachedEof ثبت می‌شود
+            val reachedThreshold = lastKnownDurMs > 0L && lastKnownPosMs >= (lastKnownDurMs * 0.92).toLong()
+            if (reachedThreshold || MPVLib.getPropertyBoolean("eof-reached") == true) {
+                playbackReachedEof = true
+            }
+            saveWatchState(forceEof = playbackReachedEof)
         }
 
         if (eventId == MpvEvent.MPV_EVENT_SHUTDOWN)
@@ -2388,7 +2398,17 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             autoLoadExternalTracks()
             SubtitleNormalizer.updateAssMode()
             updateTopFilename()
+            // اگر قرار است از ابتدا پخش شود، حتماً به ثانیه ۰ برو تا watch_later داخلی mpv
+            // ویدیو را به انتهای قبلی (مثلاً ۹۵٪) نبرد
+            val wantFromStart = pendingResumeMs <= 0L
             applyPendingResume()
+            if (wantFromStart) {
+                val curPos = try { player.timePos ?: 0.0 } catch (_: Exception) { 0.0 }
+                if (curPos > 1.0) {
+                    try { MPVLib.command(arrayOf("seek", "0", "absolute", "exact")) }
+                    catch (e: Exception) { Log.w(TAG, "seek-to-start failed", e) }
+                }
+            }
             scheduleThumbCapture()
             scheduleHwdecWatchdog()
             // ثبت شروع پخش: برچسب New برداشته و به‌عنوان آخرین پخش علامت‌گذاری می‌شود
@@ -2400,6 +2420,10 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         }
 
         if (eventId == MpvEvent.MPV_EVENT_START_FILE) {
+            // ریست وضعیت برای فایل جدید (قبل از هر کاری)
+            playbackReachedEof = false
+            playbackHasStarted = false
+
             // بازگرداندن دیکدر به حالت پیش‌فرض HW در شروع هر فایل
             // (تا تنظیم قبلی یا واچ‌داگ آن را روی HW+ نگه ندارد)
             val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(this)
