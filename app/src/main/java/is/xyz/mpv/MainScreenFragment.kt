@@ -1212,38 +1212,82 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
     private fun loadVideos() {
         binding.permissionView.isVisible = false
         binding.emptyView.isVisible = false
-        binding.loading.isVisible = false // حذف کامل نمایش اسپینر لودینگ
+        binding.loading.isVisible = false
 
-        // اگر از قبل اسکن شده، بلافاصله بدون مکث نمایش بده
+        val appCtx = requireContext().applicationContext
+
+        // ۱. اگر کش در رم نبود، کش فوری دیسک را بخوان تا در فریم اول صفحه سیاه نماند
+        if (cachedFolders.isEmpty()) {
+            val diskCached = VideoScanner.loadDiskCache(appCtx)
+            if (diskCached.isNotEmpty()) {
+                cachedFolders = diskCached
+            }
+        }
+
+        // نمایش فوری بدون هیچ مکثی در صورت وجود کش (رم یا دیسک)
         if (cachedFolders.isNotEmpty() && folders.isEmpty()) {
             folders = cachedFolders
             loadedOnce = true
+            lastPlayedId = WatchTracker.lastPlayedId(appCtx)
+            updateFab()
             showFolders()
         }
 
-        val appCtx = requireContext().applicationContext
         scanner.execute {
-            val result = VideoScanner.scan(appCtx)
-            cachedFolders = result
-            preloadDiskThumbnails(appCtx, result)
+            // ۲. اسکن سریع اولیه فقط از روی MediaStore (بدون درگیر کردن File.listFiles)
+            val fastResult = VideoScanner.scanFast(appCtx)
+            val hadInitialUI = cachedFolders.isNotEmpty()
+            cachedFolders = fastResult
+
             if (!isAdded) return@execute
-            requireActivity().runOnUiThread {
-                if (!isAdded) return@runOnUiThread
-                folders = result
-                loadedOnce = true
-                val ctx = requireContext()
-                newVideoIds = WatchTracker.updateKnownIds(
-                    ctx, result.asSequence().flatMap { it.videos }.map { it.id }.toSet())
-                lastPlayedId = WatchTracker.lastPlayedId(ctx)
-                updateFab()
-                binding.loading.isVisible = false
-                if (openFolder != null) {
-                    val updated = folders.find { it.name == openFolder!!.name }
-                    if (updated != null) showVideos(updated) else showFolders()
-                } else {
-                    showFolders()
+
+            // اگر دفعه اول نصب است و کش دیسک وجود نداشت، بلافاصله نتیجه سریع را رندر کن
+            if (!hadInitialUI) {
+                requireActivity().runOnUiThread {
+                    if (!isAdded) return@runOnUiThread
+                    folders = fastResult
+                    loadedOnce = true
+                    val ctx = requireContext()
+                    newVideoIds = WatchTracker.updateKnownIds(
+                        ctx, fastResult.asSequence().flatMap { it.videos }.map { it.id }.toSet()
+                    )
+                    lastPlayedId = WatchTracker.lastPlayedId(ctx)
+                    updateFab()
+                    if (openFolder != null) {
+                        val updated = folders.find { it.name == openFolder!!.name }
+                        if (updated != null) showVideos(updated) else showFolders()
+                    } else {
+                        showFolders()
+                    }
                 }
             }
+
+            // ۳. تکمیل اطلاعات زیرنویس‌های هم‌نام (.srt/.ass) و ذخیره در کش دیسک در پس‌زمینه
+            val fullResult = VideoScanner.enrichAndCache(appCtx, fastResult)
+            cachedFolders = fullResult
+
+            if (isAdded) {
+                requireActivity().runOnUiThread {
+                    if (!isAdded) return@runOnUiThread
+                    folders = fullResult
+                    loadedOnce = true
+                    val ctx = requireContext()
+                    newVideoIds = WatchTracker.updateKnownIds(
+                        ctx, fullResult.asSequence().flatMap { it.videos }.map { it.id }.toSet()
+                    )
+                    lastPlayedId = WatchTracker.lastPlayedId(ctx)
+                    updateFab()
+                    if (openFolder != null) {
+                        val updated = folders.find { it.name == openFolder!!.name }
+                        if (updated != null) showVideos(updated) else showFolders()
+                    } else {
+                        showFolders()
+                    }
+                }
+            }
+
+            // ۴. پیش‌بارگذاری تامبنیل‌ها بعد از نمایش UI (هرگز نباید نمایش لیست را مسدود کند)
+            preloadDiskThumbnails(appCtx, fullResult)
         }
     }
 

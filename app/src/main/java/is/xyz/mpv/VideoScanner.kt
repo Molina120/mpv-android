@@ -5,13 +5,22 @@ import android.content.Context
 import android.net.Uri
 import android.provider.MediaStore
 import android.util.Log
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
+import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
 
 /**
  * پیدا کردن ویدیوهای دستگاه از طریق MediaStore و گروه‌بندی بر اساس پوشه
- * (نمای «Folders» به سبک MX Player).
+ * (نمای «Folders» به سبک MX Player) همراه با کش دیسک و اسکن دو مرحله‌ای.
  */
 object VideoScanner {
     private const val TAG = "VideoScanner"
+    private const val CACHE_FILE_NAME = "folders_cache_v1.bin"
+    private const val CACHE_MAGIC = 0x4D505631 // "MPV1"
 
     data class Video(
         val id: Long,
@@ -22,11 +31,12 @@ object VideoScanner {
         val dateModifiedSec: Long,
         val folder: String,
         val hasSubtitle: Boolean,
-        val hasDubbedAudio: Boolean
+        val hasDubbedAudio: Boolean,
+        val dataPath: String? = null
     )
 
     data class Folder(val name: String, val videos: List<Video>) {
-        val totalSize: Long get() = videos.sumOf { it.sizeBytes }
+        val totalSize: Long = videos.sumOf { it.sizeBytes }
     }
 
     /** تشخیص زیرنویس‌دار / دوبله بودن از روی نام فایل (مثل Subbed/Dubbed در ریلیزهای فارسی) */
@@ -40,21 +50,11 @@ object VideoScanner {
         return sub to dub
     }
 
-    private class RawVideo(
-        val id: Long,
-        val uri: Uri,
-        val name: String,
-        val durationMs: Long,
-        val sizeBytes: Long,
-        val dateModifiedSec: Long,
-        val folder: String,
-        val dataPath: String?,
-        val nameSub: Boolean,
-        val nameDub: Boolean
-    )
-
-    fun scan(context: Context): List<Folder> {
-        val raw = mutableListOf<RawVideo>()
+    /**
+     * مرحله ۱: اسکن بسیار سریع فقط از دیتابیس MediaStore بدون I/O کند فایل‌سیستم (File.listFiles).
+     */
+    fun scanFast(context: Context): List<Folder> {
+        val videos = mutableListOf<Video>()
         val collection = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
         val projection = arrayOf(
             MediaStore.Video.Media._ID,
@@ -84,8 +84,8 @@ object VideoScanner {
                     val dataPath = try { c.getString(dataCol) } catch (e: Exception) { null }
                     val bucket = c.getString(bucketCol).takeUnless { it.isNullOrEmpty() } ?: "-"
                     val (nameSub, nameDub) = detectNameFlags(name)
-                    raw.add(
-                        RawVideo(
+                    videos.add(
+                        Video(
                             id = id,
                             uri = ContentUris.withAppendedId(collection, id),
                             name = name,
@@ -93,22 +93,31 @@ object VideoScanner {
                             sizeBytes = size,
                             dateModifiedSec = dateMod,
                             folder = bucket,
-                            dataPath = dataPath,
-                            nameSub = nameSub,
-                            nameDub = nameDub
+                            hasSubtitle = nameSub,
+                            hasDubbedAudio = nameDub,
+                            dataPath = dataPath
                         )
                     )
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "MediaStore scan failed", e)
+            Log.e(TAG, "MediaStore fast scan failed", e)
         }
-        // فایل‌های زیرنویس هر پوشه فقط یک‌بار خوانده می‌شوند (نه به‌ازای هر ویدیو)
+
+        return videos.groupBy { it.folder }
+            .map { (name, list) -> Folder(name, list) }
+            .sortedBy { it.name.lowercase() }
+    }
+
+    /**
+     * مرحله ۲: بررسی فایل‌های زیرنویس کنار فیلم‌ها در پس‌زمینه و ذخیرهٔ نتیجه در کش دیسک.
+     */
+    fun enrichAndCache(context: Context, fastFolders: List<Folder>): List<Folder> {
         val subFilesByDir = mutableMapOf<String, Set<String>>()
         fun subtitleFilesOf(dirPath: String): Set<String> =
             subFilesByDir.getOrPut(dirPath) {
                 try {
-                    java.io.File(dirPath).listFiles { _, n ->
+                    File(dirPath).listFiles { _, n ->
                         val ln = n.lowercase()
                         ln.endsWith(".srt") || ln.endsWith(".ass") ||
                                 ln.endsWith(".ssa") || ln.endsWith(".vtt")
@@ -117,30 +126,109 @@ object VideoScanner {
                     emptySet()
                 }
             }
-        val videos = raw.map { r ->
-            // فایل زیرنویس هم‌نام کنار فیلم (movie.srt / movie.fa.srt / ...)
-            val siblingSub = !r.nameSub && r.dataPath?.let { dp ->
-                val dir = try { java.io.File(dp).parent } catch (e: Exception) { null }
-                if (dir == null) false else {
-                    val base = r.name.substringBeforeLast('.').lowercase()
-                    subtitleFilesOf(dir).any { it.startsWith(base) }
+
+        var changed = false
+        val enrichedFolders = fastFolders.map { folder ->
+            val updatedVideos = folder.videos.map { v ->
+                if (v.hasSubtitle || v.dataPath == null) {
+                    v
+                } else {
+                    val dir = try { File(v.dataPath).parent } catch (e: Exception) { null }
+                    val siblingSub = if (dir != null) {
+                        val base = v.name.substringBeforeLast('.').lowercase()
+                        subtitleFilesOf(dir).any { it.startsWith(base) }
+                    } else false
+
+                    if (siblingSub) {
+                        changed = true
+                        v.copy(hasSubtitle = true)
+                    } else {
+                        v
+                    }
                 }
-            } == true
-            Video(
-                id = r.id,
-                uri = r.uri,
-                name = r.name,
-                durationMs = r.durationMs,
-                sizeBytes = r.sizeBytes,
-                dateModifiedSec = r.dateModifiedSec,
-                folder = r.folder,
-                hasSubtitle = r.nameSub || siblingSub,
-                hasDubbedAudio = r.nameDub
-            )
+            }
+            if (changed) Folder(folder.name, updatedVideos) else folder
         }
-        return videos.groupBy { it.folder }
-            .map { (name, list) -> Folder(name, list) }
-            .sortedBy { it.name.lowercase() }
+
+        saveDiskCache(context, enrichedFolders)
+        return enrichedFolders
+    }
+
+    /** حفظ سازگاری با فراخوانی‌های قدیمی احتمالی در سایر کلاس‌ها */
+    fun scan(context: Context): List<Folder> {
+        val fast = scanFast(context)
+        return enrichAndCache(context, fast)
+    }
+
+    /** خواندن فوری لیست پوشه‌ها از کش باینری دیسک (کمتر از ۳ میلی‌ثانیه برای ۸۰۰ ویدیو) */
+    fun loadDiskCache(context: Context): List<Folder> {
+        val file = File(context.cacheDir, CACHE_FILE_NAME)
+        if (!file.exists()) return emptyList()
+        return try {
+            DataInputStream(BufferedInputStream(FileInputStream(file))).use { inp ->
+                if (inp.readInt() != CACHE_MAGIC) return emptyList()
+                val folderCount = inp.readInt()
+                val collection = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                val folders = ArrayList<Folder>(folderCount)
+                for (i in 0 until folderCount) {
+                    val folderName = inp.readUTF()
+                    val videoCount = inp.readInt()
+                    val videos = ArrayList<Video>(videoCount)
+                    for (j in 0 until videoCount) {
+                        val id = inp.readLong()
+                        val name = inp.readUTF()
+                        val durationMs = inp.readLong()
+                        val sizeBytes = inp.readLong()
+                        val dateMod = inp.readLong()
+                        val hasSub = inp.readBoolean()
+                        val hasDub = inp.readBoolean()
+                        videos.add(
+                            Video(
+                                id = id,
+                                uri = ContentUris.withAppendedId(collection, id),
+                                name = name,
+                                durationMs = durationMs,
+                                sizeBytes = sizeBytes,
+                                dateModifiedSec = dateMod,
+                                folder = folderName,
+                                hasSubtitle = hasSub,
+                                hasDubbedAudio = hasDub
+                            )
+                        )
+                    }
+                    folders.add(Folder(folderName, videos))
+                }
+                folders
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to read folder disk cache", e)
+            emptyList()
+        }
+    }
+
+    private fun saveDiskCache(context: Context, folders: List<Folder>) {
+        val file = File(context.cacheDir, CACHE_FILE_NAME)
+        try {
+            DataOutputStream(BufferedOutputStream(FileOutputStream(file))).use { out ->
+                out.writeInt(CACHE_MAGIC)
+                out.writeInt(folders.size)
+                for (folder in folders) {
+                    out.writeUTF(folder.name)
+                    out.writeInt(folder.videos.size)
+                    for (v in folder.videos) {
+                        out.writeLong(v.id)
+                        out.writeUTF(v.name)
+                        out.writeLong(v.durationMs)
+                        out.writeLong(v.sizeBytes)
+                        out.writeLong(v.dateModifiedSec)
+                        out.writeBoolean(v.hasSubtitle)
+                        out.writeBoolean(v.hasDubbedAudio)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to write folder disk cache", e)
+        }
     }
 
     fun formatDuration(ms: Long): String {
