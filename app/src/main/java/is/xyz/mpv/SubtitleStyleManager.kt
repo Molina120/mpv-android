@@ -363,6 +363,9 @@ object SubtitleStyleManager {
                     marginEnd = chipMargin
                     marginStart = chipMargin
                 }
+                isFocusable = true
+                isFocusableInTouchMode = true
+                setBackgroundResource(R.drawable.tv_button_selector)
                 gravity = Gravity.CENTER
                 setTextColor(Color.BLACK)
                 textSize = 15f
@@ -413,6 +416,9 @@ object SubtitleStyleManager {
                     marginStart = dp(context, 3f)
                     marginEnd = dp(context, 3f)
                 }
+                isFocusable = true
+                isFocusableInTouchMode = true
+                setBackgroundResource(R.drawable.tv_button_selector)
                 gravity = Gravity.CENTER
                 text = context.getString(opt.nameRes)
                 textSize = 11.5f

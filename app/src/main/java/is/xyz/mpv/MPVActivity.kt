@@ -1471,8 +1471,14 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         val builder = AlertDialog.Builder(this)
         val dialogView = LayoutInflater.from(builder.context).inflate(layoutRes, null)
 
+        val isTv = Utils.isTv(this)
         for (button in buttons) {
             val buttonView = dialogView.findViewById<Button>(button.idRes)
+            if (isTv) {
+                buttonView.isFocusable = true
+                buttonView.isFocusableInTouchMode = true
+                buttonView.setBackgroundResource(R.drawable.tv_button_selector)
+            }
             buttonView.setOnClickListener {
                 val ret = button.handler()
                 if (ret) // restore state immediately
