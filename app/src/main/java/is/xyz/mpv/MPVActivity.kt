@@ -926,13 +926,13 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
     }
 
     private fun interceptDpad(ev: KeyEvent): Boolean {
-        if (btnSelected == -1) { // UP and DOWN are always grabbed and overridden
+        if (btnSelected == -1) { // Controls hidden: UP/DOWN adjusts volume
             when (ev.keyCode) {
                 KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
-                    if (ev.action == KeyEvent.ACTION_DOWN) { // activate dpad navigation
-                        btnSelected = 0
-                        updateSelectedDpadButton()
-                        showControls()
+                    if (ev.action == KeyEvent.ACTION_DOWN) {
+                        val direction = if (ev.keyCode == KeyEvent.KEYCODE_DPAD_UP)
+                            AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER
+                        audioManager?.adjustVolume(direction, AudioManager.FLAG_SHOW_UI)
                     }
                     return true
                 }
