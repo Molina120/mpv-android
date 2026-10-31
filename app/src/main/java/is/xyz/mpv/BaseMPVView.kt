@@ -98,6 +98,18 @@ abstract class BaseMPVView(context: Context, attrs: AttributeSet) : SurfaceView(
         } else {
             // We disable video output when the context disappears, enable it back
             MPVLib.setPropertyString("vo", voInUse)
+            // اگر ویدیو pause است، فریم آخر روی سرفیس جدید رندر نمی‌شود و تصویر خراب می‌ماند؛
+            // با یک seek به موقعیت فعلی، فریم را مجبور به رندر مجدد می‌کنیم
+            try {
+                if (MPVLib.getPropertyBoolean("pause") == true) {
+                    val pos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+                    if (pos > 0.0) {
+                        MPVLib.command(arrayOf("seek", pos.toString(), "absolute", "exact"))
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "surface redraw seek failed", e)
+            }
         }
     }
 

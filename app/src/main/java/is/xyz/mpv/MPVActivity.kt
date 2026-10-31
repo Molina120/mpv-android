@@ -380,6 +380,14 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         // Suppress any further callbacks
         activityIsForeground = false
 
+        // پاک‌سازی کپسول پیام پرش خودکار برای جلوگیری از leak
+        topNoticeView?.let { tv ->
+            tv.removeCallbacks(hideNoticeRunnable)
+            tv.animate().cancel()
+            (tv.parent as? android.view.ViewGroup)?.removeView(tv)
+            topNoticeView = null
+        }
+
         if (becomingNoisyReceiverRegistered) {
             unregisterReceiver(becomingNoisyReceiver)
             becomingNoisyReceiverRegistered = false
@@ -1098,6 +1106,59 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             setGravity(Gravity.TOP or Gravity.CENTER_HORIZONTAL, 0, 0)
             show()
         }
+    }
+
+    /**
+     * نمایش پیام پرش خودکار به‌صورت کپسول شناور نیمه‌شفاف در بالای صفحه.
+     * (جایگزین Toast سیستمی که در اندروید ۱۲+ نمای سفارشی را نادیده می‌گیرد)
+     * با انیمیشن محو شدن، مدت نمایش ۱.۵ ثانیه، و آپدیت فوری در پرش‌های پیاپی.
+     */
+    private var topNoticeView: android.widget.TextView? = null
+    private val hideNoticeRunnable = Runnable {
+        topNoticeView?.animate()
+            ?.alpha(0f)
+            ?.setDuration(200)
+            ?.withEndAction { topNoticeView?.visibility = android.view.View.GONE }
+            ?.start()
+    }
+
+    private fun showSkipNotice(message: String, durationMs: Long = 1500L) {
+        if (isFinishing || isDestroyed) return
+        val root = window.decorView as? android.view.ViewGroup ?: return
+        val density = resources.displayMetrics.density
+
+        val tv = topNoticeView ?: android.widget.TextView(this).apply {
+            setTextColor(android.graphics.Color.WHITE)
+            textSize = 13f
+            setPadding(
+                (14 * density).toInt(),
+                (6 * density).toInt(),
+                (14 * density).toInt(),
+                (6 * density).toInt()
+            )
+            background = android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+                cornerRadius = 20 * density
+                setColor(0x99000000.toInt()) // مشکی ۶۰٪ شفاف تا تصویر پشت آن هم دیده شود
+            }
+            elevation = 8 * density
+            val params = android.widget.FrameLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                gravity = android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL
+                topMargin = (24 * density).toInt()
+            }
+            root.addView(this, params)
+            topNoticeView = this
+        }
+
+        tv.removeCallbacks(hideNoticeRunnable)
+        tv.animate().cancel()
+        tv.text = message
+        tv.alpha = 1f
+        tv.visibility = android.view.View.VISIBLE
+        tv.postDelayed(hideNoticeRunnable, durationMs)
     }
 
     // Intent/Uri parsing
@@ -1822,7 +1883,7 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             SkipRangeManager.checkAndSkipIfNeeded(position) { targetSec ->
                 // seek روی ترد پس‌زمینه تا ترد UI با فراخوانی مسدودکننده mpv قفل نشود
                 MpvBg.post { player.timePos = targetSec }
-                showToast(getString(R.string.skip_toast, Utils.prettyTime(targetSec.roundToInt())), true)
+                showSkipNotice(getString(R.string.skip_toast, Utils.prettyTime(targetSec.roundToInt())))
             }
         }
 

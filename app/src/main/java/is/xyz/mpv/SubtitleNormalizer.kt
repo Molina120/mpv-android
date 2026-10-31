@@ -490,6 +490,10 @@ object SubtitleNormalizer : MPVLib.EventObserver {
         // نمونه: «(از بالای دیوار " قلندیا"( روستایی در فلسطین» -> «از بالای دیوار " قلندیا" (روستایی در فلسطین)»
         line = fixMalformedParentheses(line)
 
+        // ۵-ج. اصلاح گیومه‌های نامتوازن (دو گیومه بازکننده بدون بسته‌کننده)
+        // نمونه: "انتظار اومدنت رو داشتيم "لرد تيرين -> «انتظار اومدنت رو داشتیم "لرد تیرین"»
+        line = fixMalformedQuotes(line)
+
         // ۶. برگرداندن خط تیره دیالوگ به ابتدای صحیح جمله
         if (isDialogue) {
             line = "- $line"
@@ -539,6 +543,44 @@ object SubtitleNormalizer : MPVLib.EventObserver {
                 }
             }
             return sb.toString()
+        }
+
+        return s
+    }
+
+    /**
+     * اصلاح گیومه‌های مستقیم (") نامتوازن در فایل‌های SRT:
+     * الگوی `"متن "کلمه` (دو گیومه بازکننده بدون بسته‌کننده) -> `«متن "کلمه"»`
+     * این الگو در زیرنویس‌های فارسی رایج است که نویسنده گیومه بازکننده را فراموش کرده ببندد.
+     */
+    private fun fixMalformedQuotes(s: String): String {
+        if (!s.contains('"')) return s
+
+        val quoteCount = s.count { it == '"' }
+        // اگر تعداد گیومه‌ها زوج و خط با گیومه تمام می‌شود، احتمالاً درست است
+        if (quoteCount % 2 == 0 && s.trimEnd().endsWith('"')) return s
+
+        // الگو: خط با " شروع می‌شود، یک " دیگر وسط دارد، ولی با " تمام نمی‌شود
+        // مثال: "انتظار اومدنت رو داشتيم "لرد تيرين
+        if (s.startsWith('"') && quoteCount >= 2 && !s.trimEnd().endsWith('"')) {
+            // اولین " را به « تبدیل کن، آخرین بخش را با " ببند و در انتها » بگذار
+            val inner = s.substring(1).trim()
+            // دومین " (که وسط جمله است) را پیدا کن و بعد از آن تا انتها را به عنوان نقل‌قول داخلی ببند
+            val secondQuoteIdx = inner.indexOf('"')
+            if (secondQuoteIdx > 0) {
+                val beforeInner = inner.substring(0, secondQuoteIdx).trimEnd()
+                val innerQuoted = inner.substring(secondQuoteIdx + 1).trim()
+                if (innerQuoted.isNotEmpty()) {
+                    return "«$beforeInner \"$innerQuoted\"»"
+                }
+            }
+            // اگر الگوی بالا پیدا نشد، فقط گیومه اول را به « و انتها را به » تبدیل کن
+            return "«$inner»"
+        }
+
+        // اگر تعداد گیومه‌ها فرد است، یک گیومه بسته‌کننده در انتها اضافه کن
+        if (quoteCount % 2 == 1) {
+            return "$s\""
         }
 
         return s
