@@ -80,6 +80,7 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
 
     private var audioManager: AudioManager? = null
     private var volumeHideRunnable: Runnable? = null
+    private var volumeBarAnimator: android.animation.ObjectAnimator? = null
     private var justShowedControls = false
     private var audioFocusRequest: AudioFocusRequestCompat? = null
     private var audioFocusRestore: () -> Unit = {}
@@ -929,33 +930,131 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
 
     private fun showVolumeIndicator() {
         val am = audioManager ?: return
-        val maxVol = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-        val curVol = am.getStreamVolume(AudioManager.STREAM_MUSIC)
-        val percent = if (maxVol > 0) (curVol * 100 / maxVol) else 0
+        val maxVol = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+        val curVol = am.getStreamVolume(AudioManager.STREAM_MUSIC).coerceIn(0, maxVol)
 
         val indicator = binding.volumeIndicator ?: return
         val bar = binding.volumeBar ?: return
         val text = binding.volumeText ?: return
         val icon = binding.volumeIcon ?: return
 
-        bar.max = 100
-        bar.progress = percent
-        text.text = percent.toString()
-        // Update icon based on volume
-        (icon as? android.widget.TextView)?.text = when {
-            percent == 0 -> "\uD83D\uDD07" // 🔇
-            percent < 50 -> "\uD83D\uDD08" // 🔈
-            else -> "\uD83D\uDD0A" // 🔊
+        // نمایش عدد گام فعلی صدا (مثلاً 0 تا 15/30 مانند تصویر)
+        // اگر ترجیح می‌دهید درصد (0 تا 100) نمایش داده شود، خط زیر را به (curVol * 100 / maxVol).toString() تغییر دهید
+        text.text = curVol.toString()
+
+        // انیمیشن نرم و پیوسته برای بالا و پایین رفتن نوار آبی
+        val targetMax = maxVol * 100
+        if (bar.max != targetMax) bar.max = targetMax
+        val targetProgress = curVol * 100
+        volumeBarAnimator?.cancel()
+        volumeBarAnimator = android.animation.ObjectAnimator.ofInt(bar, "progress", bar.progress, targetProgress).apply {
+            duration = 110L
+            interpolator = android.view.animation.DecelerateInterpolator()
+            start()
         }
 
-        indicator.visibility = android.view.View.VISIBLE
+        // به‌روزرسانی آیکون سفید بلندگو متناسب با سطح صدا
+        val level = when {
+            curVol == 0 -> 0
+            curVol * 2 < maxVol -> 1
+            else -> 2
+        }
+        (icon as? android.widget.ImageView)?.setImageDrawable(createSpeakerDrawable(level))
 
-        // Hide after 1.5s
+        // انیمیشن ورود نرم از سمت چپ (فقط زمانی که پنل مخفی بوده است)
+        if (indicator.visibility != android.view.View.VISIBLE || indicator.alpha < 0.95f) {
+            indicator.animate().cancel()
+            if (indicator.visibility != android.view.View.VISIBLE) {
+                indicator.alpha = 0f
+                indicator.translationX = -24f
+                indicator.visibility = android.view.View.VISIBLE
+            }
+            indicator.animate()
+                .alpha(1f)
+                .translationX(0f)
+                .setDuration(160L)
+                .setInterpolator(android.view.animation.DecelerateInterpolator())
+                .withEndAction(null)
+                .start()
+        }
+
+        // مخفی شدن خودکار پس از ۱.۵ ثانیه با انیمیشن محو شدن نرم
         volumeHideRunnable?.let { indicator.removeCallbacks(it) }
         volumeHideRunnable = Runnable {
-            indicator.visibility = android.view.View.GONE
+            indicator.animate()
+                .alpha(0f)
+                .translationX(-16f)
+                .setDuration(200L)
+                .withEndAction {
+                    indicator.visibility = android.view.View.GONE
+                }
+                .start()
         }
-        indicator.postDelayed(volumeHideRunnable!!, 1500)
+        indicator.postDelayed(volumeHideRunnable!!, 1500L)
+    }
+
+    /** رسم آیکون سفید و یکدست بلندگو دقیقاً مطابق تصویر (0 = بی‌صدا، 1 = صدای کم، 2 = صدای زیاد) */
+    private fun createSpeakerDrawable(level: Int): android.graphics.drawable.Drawable {
+        return object : android.graphics.drawable.Drawable() {
+            private val fillPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.WHITE
+                style = android.graphics.Paint.Style.FILL
+            }
+            private val strokePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.WHITE
+                style = android.graphics.Paint.Style.STROKE
+                strokeCap = android.graphics.Paint.Cap.ROUND
+            }
+
+            override fun draw(canvas: android.graphics.Canvas) {
+                val b = bounds
+                if (b.isEmpty) return
+                val w = b.width().toFloat()
+                val h = b.height().toFloat()
+                strokePaint.strokeWidth = w * 0.085f
+
+                // بدنه بلندگو
+                val bodyPath = android.graphics.Path().apply {
+                    moveTo(w * 0.12f, h * 0.36f)
+                    lineTo(w * 0.28f, h * 0.36f)
+                    lineTo(w * 0.48f, h * 0.18f)
+                    lineTo(w * 0.48f, h * 0.82f)
+                    lineTo(w * 0.28f, h * 0.64f)
+                    lineTo(w * 0.12f, h * 0.64f)
+                    close()
+                }
+                canvas.drawPath(bodyPath, fillPaint)
+
+                if (level == 0) {
+                    // علامت ضربدر برای حالت بی‌صدا (Mute)
+                    canvas.drawLine(w * 0.60f, h * 0.36f, w * 0.84f, h * 0.64f, strokePaint)
+                    canvas.drawLine(w * 0.84f, h * 0.36f, w * 0.60f, h * 0.64f, strokePaint)
+                } else {
+                    // موج اول صدا
+                    val arc1 = android.graphics.RectF(w * 0.40f, h * 0.30f, w * 0.68f, h * 0.70f)
+                    canvas.drawArc(arc1, -45f, 90f, false, strokePaint)
+
+                    // موج دوم صدا (برای سطح صدای بالای ۵۰٪)
+                    if (level >= 2) {
+                        val arc2 = android.graphics.RectF(w * 0.28f, h * 0.16f, w * 0.86f, h * 0.84f)
+                        canvas.drawArc(arc2, -48f, 96f, false, strokePaint)
+                    }
+                }
+            }
+
+            override fun setAlpha(alpha: Int) {
+                fillPaint.alpha = alpha
+                strokePaint.alpha = alpha
+            }
+
+            override fun setColorFilter(colorFilter: android.graphics.ColorFilter?) {
+                fillPaint.colorFilter = colorFilter
+                strokePaint.colorFilter = colorFilter
+            }
+
+            @Deprecated("Deprecated in Java")
+            override fun getOpacity(): Int = android.graphics.PixelFormat.TRANSLUCENT
+        }
     }
 
     private fun interceptDpad(ev: KeyEvent): Boolean {
