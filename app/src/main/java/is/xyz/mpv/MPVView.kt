@@ -77,10 +77,20 @@ internal class MPVView(context: Context, attrs: AttributeSet) : BaseMPVView(cont
         }
 
         val debandMode = sharedPreferences.getString("video_debanding", "")
+        // Build vf filter chain: bottom crop (green line fix) + gradfun
+        val vfFilters = mutableListOf<String>()
+        val bottomCrop = sharedPreferences.getString("video_bottom_crop", "0")?.toIntOrNull() ?: 0
+        if (bottomCrop > 0) {
+            vfFilters.add("crop=iw:ih-$bottomCrop:0:0")
+        }
         if (debandMode == "gradfun") {
             // lower the default radius (16) to improve performance
-            MPVLib.setOptionString("vf", "gradfun=radius=12")
-        } else if (debandMode == "gpu") {
+            vfFilters.add("gradfun=radius=12")
+        }
+        if (vfFilters.isNotEmpty()) {
+            MPVLib.setOptionString("vf", vfFilters.joinToString(","))
+        }
+        if (debandMode == "gpu") {
             MPVLib.setOptionString("deband", "yes")
         }
 

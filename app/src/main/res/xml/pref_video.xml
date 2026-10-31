@@ -47,4 +47,13 @@
         android:summary="@string/pref_video_fastdecode_summary"
         android:title="@string/pref_video_fastdecode_title" />
 
+    <ListPreference
+        android:defaultValue="0"
+        app:iconSpaceReserved="false"
+        android:key="video_bottom_crop"
+        android:summary="@string/pref_video_bottom_crop_summary"
+        android:entries="@array/bottom_crop_entries"
+        android:entryValues="@array/bottom_crop_values"
+        android:title="@string/pref_video_bottom_crop_title" />
+
 </PreferenceScreen>

@@ -156,4 +156,26 @@
         <item>playpause</item>
         <item>custom</item>
     </string-array>
+    <string-array name="bottom_crop_entries">
+        <item>Off</item>
+        <item>2 px</item>
+        <item>4 px</item>
+        <item>6 px</item>
+        <item>8 px</item>
+        <item>10 px</item>
+        <item>12 px</item>
+        <item>16 px</item>
+        <item>20 px</item>
+    </string-array>
+    <string-array name="bottom_crop_values" translatable="false">
+        <item>0</item>
+        <item>2</item>
+        <item>4</item>
+        <item>6</item>
+        <item>8</item>
+        <item>10</item>
+        <item>12</item>
+        <item>16</item>
+        <item>20</item>
+    </string-array>
 </resources>

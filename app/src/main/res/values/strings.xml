@@ -180,6 +180,8 @@
     <string name="pref_video_tscale_summary">Select the filter used for interpolating the temporal axis (frames).</string>
     <string name="pref_video_tscale_message">These settings only take effect if interpolation is enabled above.</string>
 
+    <string name="pref_video_bottom_crop_title">Bottom crop (green line fix)</string>
+    <string name="pref_video_bottom_crop_summary">Crop pixels from the bottom to remove the green line on some TVs. 0 = off.</string>
     <string name="pref_video_fastdecode_title">Low-quality video decoding</string>
     <string name="pref_video_fastdecode_summary">Trades quality for performance and thus fluent playback.\n<b>REDUCES QUALITY A LOT</b></string>
 
