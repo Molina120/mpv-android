@@ -45,8 +45,9 @@
             android:imeOptions="actionDone|flagNoExtractUi"
             android:inputType="textMultiLine|textNoSuggestions"
             android:layoutDirection="ltr"
-            android:maxLines="3"
+            android:maxLines="5"
             android:minLines="2"
+            android:nestedScrollingEnabled="true"
             android:scrollbars="vertical"
             android:textDirection="ltr"
             android:textSize="13.5sp" />

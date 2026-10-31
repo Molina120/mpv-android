@@ -212,6 +212,19 @@ object SkipRangeManager {
             updateStatusPreview(it?.toString() ?: "")
         }
 
+        // اسکرول داخلی EditText: وقتی کاربر روی فیلد زمان‌ها اسکرول می‌کند،
+        // ScrollView والد نباید ژست را بدزدد تا بتوان بین زمان‌های زیاد بالا/پایین رفت
+        editSkipRanges.setOnTouchListener { v, event ->
+            if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN ||
+                event.actionMasked == android.view.MotionEvent.ACTION_MOVE) {
+                v.parent?.requestDisallowInterceptTouchEvent(true)
+            } else if (event.actionMasked == android.view.MotionEvent.ACTION_UP ||
+                event.actionMasked == android.view.MotionEvent.ACTION_CANCEL) {
+                v.parent?.requestDisallowInterceptTouchEvent(false)
+            }
+            false
+        }
+
         fun updateModeEnabled(enabled: Boolean) {
             radioSkipInside.isEnabled = enabled
             radioKeepOnly.isEnabled = enabled
