@@ -212,15 +212,30 @@ object SkipRangeManager {
             updateStatusPreview(it?.toString() ?: "")
         }
 
-        // اسکرول داخلی EditText: وقتی کاربر روی فیلد زمان‌ها اسکرول می‌کند،
-        // ScrollView والد نباید ژست را بدزدد تا بتوان بین زمان‌های زیاد بالا/پایین رفت
+        // اسکرول داخلی EditText با تحویل به ScrollView والد در انتهای محتوا:
+        // - داخل متن زمان‌ها اسکرول می‌کند
+        // - وقتی به ابتدا/انتهای متن رسید، اسکرول به والد تحویل داده می‌شود تا گزینه‌های پایین دیده شوند
+        // - کادر با maxLines=3 جمع‌وجور می‌ماند تا گزینه‌ها زیر آن پنهان نشوند
+        var lastY = 0f
         editSkipRanges.setOnTouchListener { v, event ->
-            if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN ||
-                event.actionMasked == android.view.MotionEvent.ACTION_MOVE) {
-                v.parent?.requestDisallowInterceptTouchEvent(true)
-            } else if (event.actionMasked == android.view.MotionEvent.ACTION_UP ||
-                event.actionMasked == android.view.MotionEvent.ACTION_CANCEL) {
-                v.parent?.requestDisallowInterceptTouchEvent(false)
+            when (event.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    lastY = event.y
+                    v.parent?.requestDisallowInterceptTouchEvent(true)
+                }
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    val dy = event.y - lastY
+                    // dy > 0 یعنی اسکرول به بالا (نمایش محتوای بالاتر)، dy < 0 یعنی اسکرول به پایین
+                    val canScrollUp = v.canScrollVertically(-1)
+                    val canScrollDown = v.canScrollVertically(1)
+                    val atLimit = (dy > 0 && !canScrollUp) || (dy < 0 && !canScrollDown)
+                    // اگر به انتهای محتوا رسیدیم، اجازه بده والد اسکرول شود
+                    v.parent?.requestDisallowInterceptTouchEvent(!atLimit)
+                }
+                android.view.MotionEvent.ACTION_UP,
+                android.view.MotionEvent.ACTION_CANCEL -> {
+                    v.parent?.requestDisallowInterceptTouchEvent(false)
+                }
             }
             false
         }
