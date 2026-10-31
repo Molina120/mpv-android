@@ -212,28 +212,30 @@ object SkipRangeManager {
             updateStatusPreview(it?.toString() ?: "")
         }
 
-        // اسکرول داخلی EditText با تحویل به ScrollView والد در انتهای محتوا:
-        // - داخل متن زمان‌ها اسکرول می‌کند
-        // - وقتی به ابتدا/انتهای متن رسید، اسکرول به والد تحویل داده می‌شود تا گزینه‌های پایین دیده شوند
-        // - کادر با maxLines=3 جمع‌وجور می‌ماند تا گزینه‌ها زیر آن پنهان نشوند
-        var lastY = 0f
+        // اسکرول دو مرحله‌ای برای جلوگیری از اسکرول ناخواسته:
+        // - ژست اول: فقط متن داخل کادر اسکرول می‌شود؛ رسیدن به انتها جذب می‌شود و منو اسکرول نمی‌شود
+        // - بعد از برداشتن انگشت (لمس دوم): اسکرول می‌تواند منو را هم حرکت دهد
+        var prevGestureEndedAtLimit = false
+        var parentAllowedThisGesture = false
         editSkipRanges.setOnTouchListener { v, event ->
             when (event.actionMasked) {
                 android.view.MotionEvent.ACTION_DOWN -> {
-                    lastY = event.y
-                    v.parent?.requestDisallowInterceptTouchEvent(true)
+                    // اگر ژست قبلی در انتهای محتوا تمام شده بود، این ژست جدید می‌تواند والد را اسکرول کند
+                    parentAllowedThisGesture = prevGestureEndedAtLimit
+                    prevGestureEndedAtLimit = false
+                    v.parent?.requestDisallowInterceptTouchEvent(!parentAllowedThisGesture)
                 }
                 android.view.MotionEvent.ACTION_MOVE -> {
-                    val dy = event.y - lastY
-                    // dy > 0 یعنی اسکرول به بالا (نمایش محتوای بالاتر)، dy < 0 یعنی اسکرول به پایین
-                    val canScrollUp = v.canScrollVertically(-1)
-                    val canScrollDown = v.canScrollVertically(1)
-                    val atLimit = (dy > 0 && !canScrollUp) || (dy < 0 && !canScrollDown)
-                    // اگر به انتهای محتوا رسیدیم، اجازه بده والد اسکرول شود
-                    v.parent?.requestDisallowInterceptTouchEvent(!atLimit)
+                    // فقط اگر والد برای این ژست مجاز نیست، آن را مسدود نگه دار
+                    if (!parentAllowedThisGesture) {
+                        v.parent?.requestDisallowInterceptTouchEvent(true)
+                    }
                 }
                 android.view.MotionEvent.ACTION_UP,
                 android.view.MotionEvent.ACTION_CANCEL -> {
+                    // اگر در انتهای محتوای کادر هستیم، لمس بعدی می‌تواند منو را اسکرول کند
+                    prevGestureEndedAtLimit = !v.canScrollVertically(-1) || !v.canScrollVertically(1)
+                    parentAllowedThisGesture = false
                     v.parent?.requestDisallowInterceptTouchEvent(false)
                 }
             }
