@@ -79,6 +79,7 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
     private var toast: Toast? = null
 
     private var audioManager: AudioManager? = null
+    private var volumeHideRunnable: Runnable? = null
     private var audioFocusRequest: AudioFocusRequestCompat? = null
     private var audioFocusRestore: () -> Unit = {}
 
@@ -925,6 +926,37 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         }
     }
 
+    private fun showVolumeIndicator() {
+        val am = audioManager ?: return
+        val maxVol = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        val curVol = am.getStreamVolume(AudioManager.STREAM_MUSIC)
+        val percent = if (maxVol > 0) (curVol * 100 / maxVol) else 0
+
+        val indicator = binding.volumeIndicator ?: return
+        val bar = binding.volumeBar ?: return
+        val text = binding.volumeText ?: return
+        val icon = binding.volumeIcon ?: return
+
+        bar.max = 100
+        bar.progress = percent
+        text.text = percent.toString()
+        // Update icon based on volume
+        (icon as? android.widget.TextView)?.text = when {
+            percent == 0 -> "\uD83D\uDD07" // 🔇
+            percent < 50 -> "\uD83D\uDD08" // 🔈
+            else -> "\uD83D\uDD0A" // 🔊
+        }
+
+        indicator.visibility = android.view.View.VISIBLE
+
+        // Hide after 1.5s
+        volumeHideRunnable?.let { indicator.removeCallbacks(it) }
+        volumeHideRunnable = Runnable {
+            indicator.visibility = android.view.View.GONE
+        }
+        indicator.postDelayed(volumeHideRunnable!!, 1500)
+    }
+
     private fun interceptDpad(ev: KeyEvent): Boolean {
         if (btnSelected == -1) { // Controls hidden: UP/DOWN adjusts volume
             when (ev.keyCode) {
@@ -932,7 +964,9 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
                     if (ev.action == KeyEvent.ACTION_DOWN) {
                         val direction = if (ev.keyCode == KeyEvent.KEYCODE_DPAD_UP)
                             AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER
-                        audioManager?.adjustVolume(direction, AudioManager.FLAG_SHOW_UI)
+                        // Adjust without system UI, show our MX-style indicator
+                        audioManager?.adjustVolume(direction, 0)
+                        showVolumeIndicator()
                     }
                     return true
                 }
