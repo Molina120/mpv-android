@@ -212,30 +212,25 @@ object SkipRangeManager {
             updateStatusPreview(it?.toString() ?: "")
         }
 
-        // اسکرول دو مرحله‌ای برای جلوگیری از اسکرول ناخواسته:
-        // - ژست اول: فقط متن داخل کادر اسکرول می‌شود؛ رسیدن به انتها جذب می‌شود و منو اسکرول نمی‌شود
-        // - بعد از برداشتن انگشت (لمس دوم): اسکرول می‌تواند منو را هم حرکت دهد
-        var prevGestureEndedAtLimit = false
-        var parentAllowedThisGesture = false
+        // اسکرول جهت‌آگاه: کادر متن هر وقت بتواند در جهت حرکت انگشت اسکرول کند،
+        // والد (منو) دخالت نمی‌کند؛ فقط وقتی به انتهای محتوا رسیده‌ایم و کاربر
+        // همچنان در همان جهت می‌کشد، اسکرول به منو واگذار می‌شود.
+        var lastTouchY = 0f
         editSkipRanges.setOnTouchListener { v, event ->
             when (event.actionMasked) {
                 android.view.MotionEvent.ACTION_DOWN -> {
-                    // اگر ژست قبلی در انتهای محتوا تمام شده بود، این ژست جدید می‌تواند والد را اسکرول کند
-                    parentAllowedThisGesture = prevGestureEndedAtLimit
-                    prevGestureEndedAtLimit = false
-                    v.parent?.requestDisallowInterceptTouchEvent(!parentAllowedThisGesture)
+                    lastTouchY = event.y
+                    v.parent?.requestDisallowInterceptTouchEvent(true)
                 }
                 android.view.MotionEvent.ACTION_MOVE -> {
-                    // فقط اگر والد برای این ژست مجاز نیست، آن را مسدود نگه دار
-                    if (!parentAllowedThisGesture) {
-                        v.parent?.requestDisallowInterceptTouchEvent(true)
-                    }
+                    val dy = event.y - lastTouchY
+                    lastTouchY = event.y
+                    // dy > 0 یعنی انگشت به پایین می‌رود و محتوا به بالا اسکرول می‌شود
+                    val canScroll = if (dy > 0) v.canScrollVertically(-1) else v.canScrollVertically(1)
+                    v.parent?.requestDisallowInterceptTouchEvent(canScroll)
                 }
                 android.view.MotionEvent.ACTION_UP,
                 android.view.MotionEvent.ACTION_CANCEL -> {
-                    // اگر در انتهای محتوای کادر هستیم، لمس بعدی می‌تواند منو را اسکرول کند
-                    prevGestureEndedAtLimit = !v.canScrollVertically(-1) || !v.canScrollVertically(1)
-                    parentAllowedThisGesture = false
                     v.parent?.requestDisallowInterceptTouchEvent(false)
                 }
             }
