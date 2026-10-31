@@ -21,7 +21,6 @@ import android.view.WindowInsets
 import android.view.WindowManager
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
-import androidx.appcompat.widget.SwitchCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -283,8 +282,8 @@ object SubtitleStyleManager {
 
         val colorChipsContainer = view.findViewById<LinearLayout>(R.id.colorChipsContainer)
         val bgChipsContainer = view.findViewById<LinearLayout>(R.id.bgChipsContainer)
-        val switchSubBold = view.findViewById<SwitchCompat>(R.id.switchSubBold)
-        val switchAssOverride = view.findViewById<SwitchCompat>(R.id.switchAssOverride)
+        val switchSubBold = view.findViewById<CheckBox>(R.id.switchSubBold)
+        val switchAssOverride = view.findViewById<CheckBox>(R.id.switchAssOverride)
 
         // جلوگیری از سرقت لمس اسلایدرها توسط ScrollView
         lockSeekBarTouch(seekSubSize)
@@ -416,8 +415,9 @@ object SubtitleStyleManager {
 
         bgOptions.forEach { opt ->
             val tv = TextView(context).apply {
+                // عرض wrap_content تا متن کامل با درصد دیده شود (داخل HorizontalScrollView)
                 layoutParams = LinearLayout.LayoutParams(
-                    0, dp(context, 36f), 1f
+                    ViewGroup.LayoutParams.WRAP_CONTENT, dp(context, 36f)
                 ).apply {
                     marginStart = dp(context, 3f)
                     marginEnd = dp(context, 3f)
@@ -426,7 +426,7 @@ object SubtitleStyleManager {
                 text = context.getString(opt.nameRes)
                 textSize = 11.5f
                 maxLines = 1
-                setPadding(dp(context, 4f), 0, dp(context, 4f), 0)
+                setPadding(dp(context, 12f), 0, dp(context, 12f), 0)
                 setOnClickListener {
                     if (opt.id != currentBgId) {
                         currentBgId = opt.id

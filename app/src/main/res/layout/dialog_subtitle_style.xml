@@ -3,11 +3,12 @@
     android:id="@+id/scrollSubStyle"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:fadeScrollbars="false"
+    android:fadeScrollbars="true"
     android:overScrollMode="never"
     android:paddingHorizontal="18dp"
     android:paddingTop="8dp"
     android:paddingBottom="4dp"
+    android:scrollbars="vertical"
     android:verticalScrollbarPosition="left">
 
     <LinearLayout
@@ -184,7 +185,7 @@
                 android:orientation="horizontal" />
         </HorizontalScrollView>
 
-        <!-- کادر پس‌زمینه (دکمه‌های تک‌کلیکی) -->
+        <!-- کادر پس‌زمینه (دکمه‌های تک‌کلیکی با اسکرول افقی تا درصدها کامل دیده شوند) -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -193,38 +194,41 @@
             android:textSize="13sp"
             android:textStyle="bold" />
 
-        <LinearLayout
-            android:id="@+id/bgChipsContainer"
+        <HorizontalScrollView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginBottom="10dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal" />
+            android:overScrollMode="never"
+            android:scrollbars="none">
 
-        <!-- سوئیچ‌های Bold و ASS در یک ردیف فشرده و خوش‌دست -->
+            <LinearLayout
+                android:id="@+id/bgChipsContainer"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal" />
+        </HorizontalScrollView>
+
+        <!-- چک‌باکس‌های Bold و ASS (تیک‌زدنی، چسبیده به متن) -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
-            <androidx.appcompat.widget.SwitchCompat
+            <CheckBox
                 android:id="@+id/switchSubBold"
                 android:layout_width="0dp"
                 android:layout_height="42dp"
                 android:layout_weight="1"
-                android:focusable="false"
-                android:paddingEnd="8dp"
                 android:text="@string/subtitle_bold"
                 android:textSize="13sp" />
 
-            <androidx.appcompat.widget.SwitchCompat
+            <CheckBox
                 android:id="@+id/switchAssOverride"
                 android:layout_width="0dp"
                 android:layout_height="42dp"
                 android:layout_weight="1"
-                android:focusable="false"
-                android:paddingStart="8dp"
                 android:text="@string/subtitle_ass_override"
                 android:textSize="13sp" />
         </LinearLayout>
