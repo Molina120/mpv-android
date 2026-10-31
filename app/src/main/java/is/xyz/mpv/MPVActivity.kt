@@ -1672,11 +1672,15 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         dialogView.setBackgroundResource(R.drawable.dialog_dark_bg)
 
         var firstFocusableBtn: Button? = null
+        val isTvDevice = Utils.isTv(this)
         for (button in buttons) {
             val buttonView = dialogView.findViewById<Button>(button.idRes) ?: continue
             buttonView.isFocusable = true
             buttonView.isFocusableInTouchMode = false
-            buttonView.setBackgroundResource(R.drawable.item_focus_selector)
+            // Blue focus reflection only on TV, not on mobile
+            if (isTvDevice) {
+                buttonView.setBackgroundResource(R.drawable.item_focus_selector)
+            }
             buttonView.setTextColor(Color.parseColor("#FFFFFF"))
             // No scale animation - just the blue border, to avoid frame clipping at dialog edges
             if (firstFocusableBtn == null && buttonView.visibility == View.VISIBLE) {

@@ -256,6 +256,12 @@ object SubtitleStyleManager {
     fun showStyleDialog(context: Context, onDismiss: () -> Unit) {
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
         val view = LayoutInflater.from(context).inflate(R.layout.dialog_subtitle_style, null)
+        // Blue focus reflection only on TV, not mobile
+        if (Utils.isTv(context)) {
+            view.findViewById<android.widget.SeekBar>(R.id.seekSubSize)?.setBackgroundResource(R.drawable.item_focus_selector)
+            view.findViewById<android.widget.SeekBar>(R.id.seekSubPos)?.setBackgroundResource(R.drawable.item_focus_selector)
+            view.findViewById<android.widget.SeekBar>(R.id.seekSubBorder)?.setBackgroundResource(R.drawable.item_focus_selector)
+        }
 
         val scrollSubStyle = view.findViewById<ScrollView>(R.id.scrollSubStyle)
         val txtSubSize = view.findViewById<TextView>(R.id.txtSubSize)

@@ -194,6 +194,12 @@ object SkipRangeManager {
         val cfg = getConfig(context, videoId)
 
         val view = LayoutInflater.from(context).inflate(R.layout.dialog_skip_ranges, null)
+        // Blue focus reflection only on TV, not mobile
+        if (Utils.isTv(context)) {
+            view.findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.switchSkipEnabled)?.setBackgroundResource(R.drawable.item_focus_selector)
+            view.findViewById<android.widget.RadioButton>(R.id.radioSkipInside)?.setBackgroundResource(R.drawable.item_focus_selector)
+            view.findViewById<android.widget.RadioButton>(R.id.radioPlayOnly)?.setBackgroundResource(R.drawable.item_focus_selector)
+        }
         val switchSkipEnabled = view.findViewById<SwitchCompat>(R.id.switchSkipEnabled)
         val editSkipRanges = view.findViewById<EditText>(R.id.editSkipRanges)
         val radioGroupSkipMode = view.findViewById<RadioGroup>(R.id.radioGroupSkipMode)

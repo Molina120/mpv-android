@@ -44,7 +44,6 @@
                 android:id="@+id/seekSubSize"
                 android:layout_width="match_parent"
                 android:layout_height="34dp"
-                android:background="@drawable/item_focus_selector"
                 android:focusable="true"
                 android:max="80" />
 
@@ -74,7 +73,6 @@
                 android:id="@+id/seekSubPos"
                 android:layout_width="match_parent"
                 android:layout_height="34dp"
-                android:background="@drawable/item_focus_selector"
                 android:focusable="true"
                 android:max="100" />
 
@@ -104,7 +102,6 @@
                 android:id="@+id/seekSubBorder"
                 android:layout_width="match_parent"
                 android:layout_height="34dp"
-                android:background="@drawable/item_focus_selector"
                 android:focusable="true"
                 android:max="60" />
 
@@ -186,7 +183,6 @@
                 android:textColor="#FFFFFF"
                 android:layout_width="match_parent"
                 android:layout_height="42dp"
-                android:background="@drawable/item_focus_selector"
                 android:focusable="true"
                 android:paddingHorizontal="8dp"
                 android:text="@string/subtitle_bold"

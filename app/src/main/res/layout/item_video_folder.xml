@@ -6,7 +6,7 @@
     android:orientation="horizontal"
     android:focusable="true"
     android:focusableInTouchMode="true"
-    android:background="@drawable/item_focus_selector"
+    
     android:paddingHorizontal="16dp"
     android:paddingVertical="12dp">
 

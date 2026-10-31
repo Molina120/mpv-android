@@ -473,6 +473,12 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         }
 
         inner class FolderVH(v: View) : RecyclerView.ViewHolder(v) {
+            init {
+                // Blue focus reflection only on TV, not mobile
+                if (Utils.isTv(v.context)) {
+                    v.setBackgroundResource(R.drawable.item_focus_selector)
+                }
+            }
             private val name: TextView = v.findViewById(R.id.folderName)
             private val count: TextView = v.findViewById(R.id.folderCount)
             private val size: TextView = v.findViewById(R.id.folderSize)
@@ -506,6 +512,12 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         }
 
         inner class VideoVH(v: View) : RecyclerView.ViewHolder(v) {
+            init {
+                // Blue focus reflection only on TV, not mobile
+                if (Utils.isTv(v.context)) {
+                    v.setBackgroundResource(R.drawable.item_focus_selector)
+                }
+            }
             private val thumb: ImageView = v.findViewById(R.id.videoThumb)
             private val thumbDuration: TextView = v.findViewById(R.id.thumbDuration)
             private val name: TextView = v.findViewById(R.id.videoName)
