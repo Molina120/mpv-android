@@ -598,7 +598,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                 // ۱. تلاش اول با MediaMetadataRetriever
                 var rawBmp: Bitmap? = retrieverFrame(appCtx, video)
 
-                // ۲. تلاش دوم با بندانگشتی سیستم (بسیار سریع‌تر از MediaCodec در صورت وجود در MediaStore)
+                // ۲. تلاش دوم با بندانگشتی سیستم (اگر مرحله اول سیاه یا نال بود)
                 if (rawBmp == null || isMostlyBlack(rawBmp)) {
                     val sysBmp = loadSystemThumbnail(appCtx, video)
                     if (sysBmp != null && (!isMostlyBlack(sysBmp) || rawBmp == null)) {
@@ -607,7 +607,17 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                     }
                 }
 
-                // ۳. تلاش سوم با MediaCodec برای 10-bit HEVC / x265 / HDR10+
+                // ۳. تلاش سوم (مخصوص 10-bit x265 / HEVC / HDR): دیکد با MediaCodec روی Surface مخفی EGL
+                // در این حالت GPU به صورت خودکار فرمت‌های 10 بیتی P010 / I010 / UBWC را به RGB تبدیل می‌کند
+                if (rawBmp == null || isMostlyBlack(rawBmp)) {
+                    val glBmp = decodeFrameWithGlSurface(appCtx, video)
+                    if (glBmp != null && (!isMostlyBlack(glBmp) || rawBmp == null)) {
+                        if (rawBmp != null && rawBmp !== glBmp) rawBmp.recycle()
+                        rawBmp = glBmp
+                    }
+                }
+
+                // ۴. تلاش چهارم: دیکد در حالت ByteBuffer پردازنده (پشتیبانی از هر دو چیدمان I010 Planar و P010)
                 if (rawBmp == null || isMostlyBlack(rawBmp)) {
                     val codecBmp = decodeFrameWithCpuMediaCodec(appCtx, video)
                     if (codecBmp != null && (!isMostlyBlack(codecBmp) || rawBmp == null)) {
@@ -620,13 +630,15 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                     val finalBmp = scaleCenterCrop(rawBmp, THUMB_WIDTH, THUMB_HEIGHT)
                     if (finalBmp !== rawBmp) rawBmp.recycle()
 
-                    thumbCache.put(video.id, finalBmp)
                     ThumbDiskCache.save(appCtx, video.id, finalBmp)
+                    val ramBmp = ThumbDiskCache.load(appCtx, video.id) ?: finalBmp
+                    if (ramBmp !== finalBmp) finalBmp.recycle()
+                    thumbCache.put(video.id, ramBmp)
                     thumbFailed.remove(video.id)
 
                     imageView.post {
                         if (isAdded && imageView.tag == video.id) {
-                            imageView.setImageBitmap(finalBmp)
+                            imageView.setImageBitmap(ramBmp)
                         } else if (isAdded) {
                             binding.videoList.post {
                                 val adapter = binding.videoList.adapter as? BrowserAdapter ?: return@post
@@ -650,7 +662,6 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         }
     }
 
-    /** مرحله ۱: استخراج فریم با MediaMetadataRetriever */
     private fun retrieverFrame(appCtx: Context, video: VideoScanner.Video): Bitmap? {
         val r = MediaMetadataRetriever()
         var pfd: android.os.ParcelFileDescriptor? = null
@@ -679,7 +690,6 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                     durationMs * 150L, // 15%
                     durationMs * 300L, // 30%
                     durationMs * 500L, // 50%
-                    15_000_000L,
                     0L
                 )
             } else {
@@ -709,20 +719,21 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             val params = MediaMetadataRetriever.BitmapParams().apply {
                 preferredConfig = Bitmap.Config.ARGB_8888
             }
-            try {
-                r.getScaledFrameAtTime(
-                    timeUs,
-                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
-                    THUMB_WIDTH,
-                    THUMB_HEIGHT,
-                    params
-                )?.let { return it }
-            } catch (_: Exception) { }
-
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                try {
+                    r.getScaledFrameAtTime(
+                        timeUs,
+                        MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                        THUMB_WIDTH,
+                        THUMB_HEIGHT,
+                        params
+                    )?.let { return it }
+                } catch (_: Throwable) { }
+            }
             try {
                 r.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, params)
                     ?.let { return it }
-            } catch (_: Exception) { }
+            } catch (_: Throwable) { }
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
@@ -733,38 +744,324 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                     THUMB_WIDTH,
                     THUMB_HEIGHT
                 )?.let { return it }
-            } catch (_: Exception) { }
+            } catch (_: Throwable) { }
         }
 
         return try {
             r.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             null
         }
     }
 
+    /**
+     * استخراج فریم ویدیوهای 10-bit x265 / 4K HDR از طریق رندر مستقیم MediaCodec به Surface مخفی EGL.
+     * این روش تمام محدودیت‌های ByteBuffer در اندروید (فرمت‌های P010، I010 و UBWC) را دور می‌زند.
+     */
+    private fun decodeFrameWithGlSurface(appCtx: Context, video: VideoScanner.Video): Bitmap? {
+        val extractor = MediaExtractor()
+        var pfd: android.os.ParcelFileDescriptor? = null
+
+        return try {
+            pfd = appCtx.contentResolver.openFileDescriptor(video.uri, "r")
+            if (pfd != null) {
+                extractor.setDataSource(pfd.fileDescriptor)
+            } else {
+                extractor.setDataSource(appCtx, video.uri, null)
+            }
+
+            var videoTrackIndex = -1
+            var origFormat: MediaFormat? = null
+            var origMime = ""
+            for (i in 0 until extractor.trackCount) {
+                val f = extractor.getTrackFormat(i)
+                val m = f.getString(MediaFormat.KEY_MIME) ?: continue
+                if (m.startsWith("video/")) {
+                    videoTrackIndex = i
+                    origFormat = f
+                    origMime = m
+                    break
+                }
+            }
+            if (videoTrackIndex < 0 || origFormat == null) return null
+            extractor.selectTrack(videoTrackIndex)
+
+            val width = if (origFormat.containsKey(MediaFormat.KEY_WIDTH)) origFormat.getInteger(MediaFormat.KEY_WIDTH) else 1920
+            val height = if (origFormat.containsKey(MediaFormat.KEY_HEIGHT)) origFormat.getInteger(MediaFormat.KEY_HEIGHT) else 1080
+            val durationUs = when {
+                video.durationMs > 0 -> video.durationMs * 1000L
+                origFormat.containsKey(MediaFormat.KEY_DURATION) -> origFormat.getLong(MediaFormat.KEY_DURATION)
+                else -> 0L
+            }
+
+            val targetMime = if (origMime == "video/dolby-vision") {
+                MediaFormat.MIMETYPE_VIDEO_HEVC
+            } else {
+                origMime
+            }
+
+            val cleanFormat = MediaFormat.createVideoFormat(targetMime, width, height).apply {
+                setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, maxOf(width * height * 2, 4 * 1024 * 1024))
+                for (csdKey in arrayOf("csd-0", "csd-1", "csd-2")) {
+                    if (origFormat.containsKey(csdKey)) {
+                        origFormat.getByteBuffer(csdKey)?.let { buf ->
+                            val copy = java.nio.ByteBuffer.allocate(buf.remaining())
+                            copy.put(buf.duplicate())
+                            copy.flip()
+                            setByteBuffer(csdKey, copy)
+                        }
+                    }
+                }
+            }
+
+            val dstW = THUMB_WIDTH
+            val dstH = (THUMB_WIDTH.toFloat() * height / width.coerceAtLeast(1)).toInt().coerceIn(180, THUMB_WIDTH * 2)
+            val seekTargetsUs = if (durationUs > 10_000_000L) {
+                longArrayOf((durationUs * 0.15).toLong(), (durationUs * 0.30).toLong(), 0L)
+            } else {
+                longArrayOf(0L)
+            }
+
+            val bufferInfo = MediaCodec.BufferInfo()
+            var fallbackBmp: Bitmap? = null
+
+            // راه‌اندازی محیط مخفی EGL Pbuffer
+            val eglDisplay = android.opengl.EGL14.eglGetDisplay(android.opengl.EGL14.EGL_DEFAULT_DISPLAY)
+            if (eglDisplay == android.opengl.EGL14.EGL_NO_DISPLAY) return null
+            val version = IntArray(2)
+            if (!android.opengl.EGL14.eglInitialize(eglDisplay, version, 0, version, 1)) return null
+
+            val attribList = intArrayOf(
+                android.opengl.EGL14.EGL_RED_SIZE, 8,
+                android.opengl.EGL14.EGL_GREEN_SIZE, 8,
+                android.opengl.EGL14.EGL_BLUE_SIZE, 8,
+                android.opengl.EGL14.EGL_ALPHA_SIZE, 8,
+                android.opengl.EGL14.EGL_RENDERABLE_TYPE, android.opengl.EGL14.EGL_OPENGL_ES2_BIT,
+                android.opengl.EGL14.EGL_SURFACE_TYPE, android.opengl.EGL14.EGL_PBUFFER_BIT,
+                android.opengl.EGL14.EGL_NONE
+            )
+            val configs = arrayOfNulls<android.opengl.EGLConfig>(1)
+            val numConfigs = IntArray(1)
+            if (!android.opengl.EGL14.eglChooseConfig(eglDisplay, attribList, 0, configs, 0, 1, numConfigs, 0) || numConfigs[0] <= 0) {
+                android.opengl.EGL14.eglTerminate(eglDisplay)
+                return null
+            }
+            val eglConfig = configs[0]!!
+            val ctxAttribs = intArrayOf(android.opengl.EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, android.opengl.EGL14.EGL_NONE)
+            val eglContext = android.opengl.EGL14.eglCreateContext(eglDisplay, eglConfig, android.opengl.EGL14.EGL_NO_CONTEXT, ctxAttribs, 0)
+            val surfAttribs = intArrayOf(android.opengl.EGL14.EGL_WIDTH, dstW, android.opengl.EGL14.EGL_HEIGHT, dstH, android.opengl.EGL14.EGL_NONE)
+            val eglSurface = android.opengl.EGL14.eglCreatePbufferSurface(eglDisplay, eglConfig, surfAttribs, 0)
+            android.opengl.EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
+
+            val texIds = IntArray(1)
+            android.opengl.GLES20.glGenTextures(1, texIds, 0)
+            val texId = texIds[0]
+            android.opengl.GLES20.glBindTexture(android.opengl.GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texId)
+            android.opengl.GLES20.glTexParameterf(android.opengl.GLES11Ext.GL_TEXTURE_EXTERNAL_OES, android.opengl.GLES20.GL_TEXTURE_MIN_FILTER, android.opengl.GLES20.GL_LINEAR.toFloat())
+            android.opengl.GLES20.glTexParameterf(android.opengl.GLES11Ext.GL_TEXTURE_EXTERNAL_OES, android.opengl.GLES20.GL_TEXTURE_MAG_FILTER, android.opengl.GLES20.GL_LINEAR.toFloat())
+
+            // شیدر تبدیل بافت ویدیو (OES) به RGB
+            val vShaderCode = """
+                attribute vec4 aPosition;
+                attribute vec4 aTexCoord;
+                uniform mat4 uSTMatrix;
+                varying vec2 vTexCoord;
+                void main() {
+                    gl_Position = aPosition;
+                    vTexCoord = (uSTMatrix * aTexCoord).xy;
+                }
+            """.trimIndent()
+            val fShaderCode = """
+                #extension GL_OES_EGL_image_external : require
+                precision mediump float;
+                varying vec2 vTexCoord;
+                uniform samplerExternalOES sTexture;
+                void main() {
+                    gl_FragColor = texture2D(sTexture, vTexCoord);
+                }
+            """.trimIndent()
+
+            fun compileShader(type: Int, src: String): Int {
+                val s = android.opengl.GLES20.glCreateShader(type)
+                android.opengl.GLES20.glShaderSource(s, src)
+                android.opengl.GLES20.glCompileShader(s)
+                return s
+            }
+            val vs = compileShader(android.opengl.GLES20.GL_VERTEX_SHADER, vShaderCode)
+            val fs = compileShader(android.opengl.GLES20.GL_FRAGMENT_SHADER, fShaderCode)
+            val program = android.opengl.GLES20.glCreateProgram()
+            android.opengl.GLES20.glAttachShader(program, vs)
+            android.opengl.GLES20.glAttachShader(program, fs)
+            android.opengl.GLES20.glLinkProgram(program)
+
+            val quadVertices = java.nio.ByteBuffer.allocateDirect(8 * 4).order(java.nio.ByteOrder.nativeOrder()).asFloatBuffer().apply {
+                put(floatArrayOf(-1f, 1f, 1f, 1f, -1f, -1f, 1f, -1f)) // Flip Y برای glReadPixels
+                position(0)
+            }
+            val quadTexCoords = java.nio.ByteBuffer.allocateDirect(8 * 4).order(java.nio.ByteOrder.nativeOrder()).asFloatBuffer().apply {
+                put(floatArrayOf(0f, 0f, 1f, 0f, 0f, 1f, 1f, 1f))
+                position(0)
+            }
+            val stMatrix = FloatArray(16)
+            val pixelBuf = java.nio.ByteBuffer.allocateDirect(dstW * dstH * 4).order(java.nio.ByteOrder.nativeOrder())
+
+            val surfaceTexture = android.graphics.SurfaceTexture(texId)
+            surfaceTexture.setDefaultBufferSize(dstW, dstH)
+            val surface = android.view.Surface(surfaceTexture)
+
+            try {
+                for (seekUs in seekTargetsUs) {
+                    // امتحان ابتدا با دیکدر پیش‌فرض (سخت‌افزاری) و در صورت خطا با دیکدر نرم‌افزاری c2.android.hevc.decoder
+                    for (useSwHevc in booleanArrayOf(false, true)) {
+                        var codec: MediaCodec? = null
+                        try {
+                            codec = if (useSwHevc && targetMime == MediaFormat.MIMETYPE_VIDEO_HEVC) {
+                                try {
+                                    MediaCodec.createByCodecName("c2.android.hevc.decoder")
+                                } catch (_: Exception) {
+                                    MediaCodec.createByCodecName("OMX.google.hevc.decoder")
+                                }
+                            } else {
+                                MediaCodec.createDecoderByType(targetMime)
+                            }
+
+                            try {
+                                codec.configure(origFormat, surface, null, 0)
+                            } catch (_: Exception) {
+                                codec.configure(cleanFormat, surface, null, 0)
+                            }
+                            codec.start()
+
+                            if (seekUs > 0L) {
+                                extractor.seekTo(seekUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+                                if (extractor.sampleTime < 0L) extractor.seekTo(0L, MediaExtractor.SEEK_TO_NEXT_SYNC)
+                            } else {
+                                extractor.seekTo(0L, MediaExtractor.SEEK_TO_NEXT_SYNC)
+                            }
+
+                            var packetsSent = 0
+                            val maxPackets = 32
+                            var inputEos = false
+                            var outputDone = false
+                            var renderedCount = 0
+                            var loops = 0
+
+                            while (!outputDone && loops < 140) {
+                                loops++
+                                if (!inputEos) {
+                                    val inIdx = codec.dequeueInputBuffer(10_000L)
+                                    if (inIdx >= 0) {
+                                        val inBuf = codec.getInputBuffer(inIdx)
+                                        if (inBuf == null || packetsSent >= maxPackets) {
+                                            codec.queueInputBuffer(inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                            inputEos = true
+                                        } else {
+                                            inBuf.clear()
+                                            val sampleSize = try { extractor.readSampleData(inBuf, 0) } catch (_: Exception) { -1 }
+                                            if (sampleSize < 0) {
+                                                codec.queueInputBuffer(inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                                inputEos = true
+                                            } else {
+                                                val pts = extractor.sampleTime.coerceAtLeast(0L)
+                                                codec.queueInputBuffer(inIdx, 0, sampleSize, pts, 0)
+                                                packetsSent++
+                                                extractor.advance()
+                                            }
+                                        }
+                                    }
+                                }
+
+                                val outIdx = codec.dequeueOutputBuffer(bufferInfo, 15_000L)
+                                if (outIdx >= 0) {
+                                    val hasFrame = bufferInfo.size > 0
+                                    codec.releaseOutputBuffer(outIdx, hasFrame)
+                                    if (hasFrame) {
+                                        renderedCount++
+                                        Thread.sleep(12)
+                                        surfaceTexture.updateTexImage()
+                                        surfaceTexture.getTransformMatrix(stMatrix)
+
+                                        android.opengl.GLES20.glViewport(0, 0, dstW, dstH)
+                                        android.opengl.GLES20.glUseProgram(program)
+                                        val posLoc = android.opengl.GLES20.glGetAttribLocation(program, "aPosition")
+                                        val texLoc = android.opengl.GLES20.glGetAttribLocation(program, "aTexCoord")
+                                        val matLoc = android.opengl.GLES20.glGetUniformLocation(program, "uSTMatrix")
+
+                                        quadVertices.position(0)
+                                        android.opengl.GLES20.glEnableVertexAttribArray(posLoc)
+                                        android.opengl.GLES20.glVertexAttribPointer(posLoc, 2, android.opengl.GLES20.GL_FLOAT, false, 0, quadVertices)
+
+                                        quadTexCoords.position(0)
+                                        android.opengl.GLES20.glEnableVertexAttribArray(texLoc)
+                                        android.opengl.GLES20.glVertexAttribPointer(texLoc, 2, android.opengl.GLES20.GL_FLOAT, false, 0, quadTexCoords)
+
+                                        android.opengl.GLES20.glUniformMatrix4fv(matLoc, 1, false, stMatrix, 0)
+                                        android.opengl.GLES20.glDrawArrays(android.opengl.GLES20.GL_TRIANGLE_STRIP, 0, 4)
+
+                                        pixelBuf.rewind()
+                                        android.opengl.GLES20.glReadPixels(0, 0, dstW, dstH, android.opengl.GLES20.GL_RGBA, android.opengl.GLES20.GL_UNSIGNED_BYTE, pixelBuf)
+                                        pixelBuf.rewind()
+
+                                        val bmp = Bitmap.createBitmap(dstW, dstH, Bitmap.Config.ARGB_8888)
+                                        bmp.copyPixelsFromBuffer(pixelBuf)
+
+                                        if (!isMostlyBlack(bmp)) {
+                                            fallbackBmp?.recycle()
+                                            return bmp
+                                        }
+                                        if (fallbackBmp == null) fallbackBmp = bmp else bmp.recycle()
+                                        if (renderedCount >= 3) outputDone = true
+                                    }
+                                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                                        outputDone = true
+                                    }
+                                }
+                            }
+                            if (renderedCount > 0) break // اگر دیکدر کار کرد، نیازی به تست دیکدر دوم در همین زمان نیست
+                        } catch (_: Exception) {
+                        } finally {
+                            try { codec?.stop() } catch (_: Exception) { }
+                            try { codec?.release() } catch (_: Exception) { }
+                        }
+                    }
+                }
+            } finally {
+                try { surface.release() } catch (_: Exception) { }
+                try { surfaceTexture.release() } catch (_: Exception) { }
+                try {
+                    android.opengl.GLES20.glDeleteProgram(program)
+                    android.opengl.GLES20.glDeleteShader(vs)
+                    android.opengl.GLES20.glDeleteShader(fs)
+                    android.opengl.GLES20.glDeleteTextures(1, texIds, 0)
+                    android.opengl.EGL14.eglMakeCurrent(eglDisplay, android.opengl.EGL14.EGL_NO_SURFACE, android.opengl.EGL14.EGL_NO_SURFACE, android.opengl.EGL14.EGL_NO_CONTEXT)
+                    android.opengl.EGL14.eglDestroySurface(eglDisplay, eglSurface)
+                    android.opengl.EGL14.eglDestroyContext(eglDisplay, eglContext)
+                    android.opengl.EGL14.eglTerminate(eglDisplay)
+                } catch (_: Exception) { }
+            }
+            fallbackBmp
+        } catch (e: Exception) {
+            Log.w(TAG, "decodeFrameWithGlSurface failed: ${video.name}", e)
+            null
+        } finally {
+            try { extractor.release() } catch (_: Exception) { }
+            try { pfd?.close() } catch (_: Exception) { }
+        }
+    }
 
     /**
-     * مرحله ۲: دیکد در حالت ByteBuffer پردازنده (بدون Surface گرافیکی)
-     * با ارسال فوری BUFFER_FLAG_END_OF_STREAM پس از فریم کلیدی برای دور زدن بافر B-Frame در انکودهای PSA
-     * و تبدیل مستقیم فرمت‌های ۱۰ بیتی (P010 / I010) و ۸ بیتی (YUV_420_888) به Bitmap.
+     * مرحله ۴ (پشتیبان): دیکد CPU در حالت ByteBuffer با پشتیبانی از چیدمان 10 بیتی Planar (I010) در c2.android.hevc.decoder
+     * و چیدمان 10 بیتی Semi-Planar (P010).
      */
-
     private fun decodeFrameWithCpuMediaCodec(appCtx: Context, video: VideoScanner.Video): Bitmap? {
         val extractor = MediaExtractor()
         var pfd: android.os.ParcelFileDescriptor? = null
 
         return try {
-            var sourceSet = false
-            try {
-                pfd = appCtx.contentResolver.openFileDescriptor(video.uri, "r")
-                if (pfd != null) {
-                    extractor.setDataSource(pfd.fileDescriptor)
-                    sourceSet = true
-                }
-            } catch (_: Exception) { }
-
-            if (!sourceSet) {
+            pfd = appCtx.contentResolver.openFileDescriptor(video.uri, "r")
+            if (pfd != null) {
+                extractor.setDataSource(pfd.fileDescriptor)
+            } else {
                 extractor.setDataSource(appCtx, video.uri, null)
             }
 
@@ -845,27 +1142,23 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                     }
                     codec.start()
 
-                    try {
-                        if (seekUs > 0L) {
-                            extractor.seekTo(seekUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
-                            if (extractor.sampleTime < 0L) {
-                                extractor.seekTo(0L, MediaExtractor.SEEK_TO_NEXT_SYNC)
-                            }
-                        } else {
+                    if (seekUs > 0L) {
+                        extractor.seekTo(seekUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+                        if (extractor.sampleTime < 0L) {
                             extractor.seekTo(0L, MediaExtractor.SEEK_TO_NEXT_SYNC)
                         }
-                    } catch (_: Exception) {
+                    } else {
                         extractor.seekTo(0L, MediaExtractor.SEEK_TO_NEXT_SYNC)
                     }
 
                     var packetsSent = 0
-                    val maxPackets = 30 // پوشش کامل فریم‌های RASL بعد از CRA در انکودهای 10-bit x265
+                    val maxPackets = 32
                     var inputEos = false
                     var outputDone = false
                     var decodedFramesCount = 0
                     var loops = 0
 
-                    while (!outputDone && loops < 160) {
+                    while (!outputDone && loops < 150) {
                         loops++
                         if (!inputEos) {
                             val inIdx = codec.dequeueInputBuffer(10_000L)
@@ -906,7 +1199,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                                         return bmp
                                     }
                                     if (fallbackBmp == null) fallbackBmp = bmp else bmp.recycle()
-                                    if (decodedFramesCount >= 4) {
+                                    if (decodedFramesCount >= 3) {
                                         outputDone = true
                                     }
                                 }
@@ -935,204 +1228,287 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         }
     }
 
-
-
     private fun convertOutputToBitmap(
         codec: MediaCodec,
         outIdx: Int,
         bufferInfo: MediaCodec.BufferInfo
     ): Bitmap? {
-        val fmt = try { codec.outputFormat } catch (_: Exception) { null }
-        val width = if (fmt != null && fmt.containsKey(MediaFormat.KEY_WIDTH)) fmt.getInteger(MediaFormat.KEY_WIDTH) else 0
-        val height = if (fmt != null && fmt.containsKey(MediaFormat.KEY_HEIGHT)) fmt.getInteger(MediaFormat.KEY_HEIGHT) else 0
-        if (width <= 0 || height <= 0) return null
-
-        // گام نمونه‌برداری برای تبدیل فوق‌سریع ویدیوهای 1080p و 4K (مثلاً گام 4 برای 4K)
-        val step = maxOf(1, minOf(width / 560, height / 320))
-        val outW = (width / step).coerceAtLeast(1)
-        val outH = (height / step).coerceAtLeast(1)
-
-        // ۱. تلاش اول از طریق Image (برای 8-bit استاندارد و P010 در اندروید ۱۳ به بالا)
+        // ابتدا تلاش با ByteBuffer خام (زیرا فراخوانی getOutputImage و بستن آن، getOutputBuffer را باطل می‌کند)
         try {
-            codec.getOutputImage(outIdx)?.use { image ->
-                val planes = image.planes
-                if (planes.size >= 3) {
-                    val yBuf = planes[0].buffer
-                    val uBuf = planes[1].buffer
-                    val vBuf = planes[2].buffer
-                    val yRowStride = planes[0].rowStride
-                    val yPixStride = planes[0].pixelStride
-                    val uvRowStride = planes[1].rowStride
-                    val uvPixStride = planes[1].pixelStride
-
-                    // تشخیص 10-bit در داخل Image (فرمت 54 = YCBCR_P010 یا گام پیکسلی ۲ بایتی در صفحه Y)
-                    val is10BitImage = image.format == 54 || yPixStride == 2 || yRowStride >= width * 2
-                    val pixels = IntArray(outW * outH)
-
-                    if (!is10BitImage) {
-                        val yBase = yBuf.position()
-                        val uBase = uBuf.position()
-                        val vBase = vBuf.position()
-                        val yLim = yBuf.limit()
-                        val uLim = uBuf.limit()
-                        val vLim = vBuf.limit()
-
-                        var idx = 0
-                        for (oy in 0 until outH) {
-                            val sy = oy * step
-                            val yRow = yBase + sy * yRowStride
-                            val uvRow = (sy shr 1) * uvRowStride
-                            for (ox in 0 until outW) {
-                                val sx = ox * step
-                                val yPos = yRow + sx * yPixStride
-                                val uvOffset = uvRow + (sx shr 1) * uvPixStride
-                                val yVal = if (yPos < yLim) (yBuf.get(yPos).toInt() and 0xFF) else 16
-                                val uVal = if (uBase + uvOffset < uLim) (uBuf.get(uBase + uvOffset).toInt() and 0xFF) - 128 else 0
-                                val vVal = if (vBase + uvOffset < vLim) (vBuf.get(vBase + uvOffset).toInt() and 0xFF) - 128 else 0
-                                pixels[idx++] = yuvToRgbPixel(yVal, uVal, vVal)
-                            }
-                        }
-                        return Bitmap.createBitmap(pixels, outW, outH, Bitmap.Config.ARGB_8888)
-                    }
-                }
+            val outBuf = codec.getOutputBuffer(outIdx)
+            if (outBuf != null && bufferInfo.size > 0) {
+                rawYuvBufferToBitmap(outBuf, bufferInfo, codec.outputFormat)?.let { return it }
             }
         } catch (_: Exception) { }
 
-        // ۲. مسیر مستقیم ByteBuffer (مخصوص 10-bit HEVC در c2.android.hevc.decoder که Image نال می‌دهد)
         return try {
-            val buf = codec.getOutputBuffer(outIdx) ?: return null
-            buf.position(bufferInfo.offset)
-            buf.limit(bufferInfo.offset + bufferInfo.size)
-            val baseOffset = bufferInfo.offset
-            val totalSize = bufferInfo.size
-
-            val rawStride = if (fmt != null && fmt.containsKey(MediaFormat.KEY_STRIDE)) {
-                fmt.getInteger(MediaFormat.KEY_STRIDE).coerceAtLeast(width)
-            } else width
-            val rawSliceH = if (fmt != null && fmt.containsKey(MediaFormat.KEY_SLICE_HEIGHT)) {
-                fmt.getInteger(MediaFormat.KEY_SLICE_HEIGHT).coerceAtLeast(height)
-            } else height
-            val colorFmt = if (fmt != null && fmt.containsKey(MediaFormat.KEY_COLOR_FORMAT)) {
-                fmt.getInteger(MediaFormat.KEY_COLOR_FORMAT)
-            } else 0
-
-            // در 10-bit (I010 / P010)، هر نمونه ۲ بایت است؛ پس حجم بافر حداقل ۲ برابر 8-bit است
-            val is16BitSample = colorFmt == 54 || totalSize >= (width * height * 3 * 9 / 10)
-            val pixels = IntArray(outW * outH)
-
-            if (is16BitSample) {
-                // محاسبه دقیق عرض سطر به بایت (۲ بایت به ازای هر پیکسل)
-                val yRowBytes = when {
-                    rawStride >= width * 2 -> rawStride
-                    totalSize >= rawStride * 2 * rawSliceH * 3 / 2 -> rawStride * 2
-                    else -> width * 2
-                }
-                val sliceH = if (yRowBytes * rawSliceH * 3 / 2 > totalSize && yRowBytes > 0) {
-                    ((totalSize * 2) / (yRowBytes * 3)).coerceAtLeast(height)
-                } else rawSliceH
-
-                val yPlaneBytes = yRowBytes * sliceH
-                val uvPlaneBytes = yPlaneBytes / 4
-
-                // تشخیص خودکار P010 (ده بیت در بیت‌های بالا: مقدار > 1023) در برابر I010 (ده بیت در بیت‌های پایین: 0..1023)
-                var isP010Shifted = colorFmt == 54
-                if (!isP010Shifted) {
-                    val checkCount = minOf(64, width)
-                    val midRow = baseOffset + (height / 2) * yRowBytes
-                    for (i in 0 until checkCount) {
-                        val pos = midRow + i * 2
-                        if (pos + 1 < baseOffset + totalSize) {
-                            val u16 = (buf.get(pos).toInt() and 0xFF) or ((buf.get(pos + 1).toInt() and 0xFF) shl 8)
-                            if (u16 > 1023) {
-                                isP010Shifted = true
-                                break
-                            }
-                        }
-                    }
-                }
-
-                fun readSample8(bytePos: Int, defaultVal: Int): Int {
-                    if (bytePos < baseOffset || bytePos + 1 >= baseOffset + totalSize) return defaultVal
-                    val lo = buf.get(bytePos).toInt() and 0xFF
-                    val hi = buf.get(bytePos + 1).toInt() and 0xFF
-                    val u16 = lo or (hi shl 8)
-                    return if (isP010Shifted) (u16 ushr 8) and 0xFF else (u16 ushr 2) and 0xFF
-                }
-
-                // c2.android.hevc.decoder از فرمت مسطح I010 (صفحه U جدا، صفحه V جدا) استفاده می‌کند،
-                // در حالی که دیکدرهای سخت‌افزاری با colorFmt == 54 از P010 (UV درهم‌تنیده) استفاده می‌کنند
-                val isSemiPlanarP010 = colorFmt == 54
-                val uPlaneStart = baseOffset + yPlaneBytes
-                val vPlaneStart = uPlaneStart + uvPlaneBytes
-                val uvRowBytesPlanar = yRowBytes / 2
-
-                var idx = 0
-                for (oy in 0 until outH) {
-                    val sy = oy * step
-                    val yRowStart = baseOffset + sy * yRowBytes
-                    val uvY = sy shr 1
-                    for (ox in 0 until outW) {
-                        val sx = ox * step
-                        val uvX = sx shr 1
-                        val yVal = readSample8(yRowStart + sx * 2, 16)
-                        val uVal: Int
-                        val vVal: Int
-                        if (isSemiPlanarP010) {
-                            val uvPos = uPlaneStart + uvY * yRowBytes + uvX * 4
-                            uVal = readSample8(uvPos, 128) - 128
-                            vVal = readSample8(uvPos + 2, 128) - 128
-                        } else {
-                            val uPos = uPlaneStart + uvY * uvRowBytesPlanar + uvX * 2
-                            val vPos = vPlaneStart + uvY * uvRowBytesPlanar + uvX * 2
-                            uVal = readSample8(uPos, 128) - 128
-                            vVal = readSample8(vPos, 128) - 128
-                        }
-                        pixels[idx++] = yuvToRgbPixel(yVal, uVal, vVal)
-                    }
-                }
-                Bitmap.createBitmap(pixels, outW, outH, Bitmap.Config.ARGB_8888)
-            } else {
-                // حالت 8-bit در ByteBuffer
-                val stride = rawStride.coerceAtLeast(width)
-                val sliceH = if (stride * rawSliceH * 3 / 2 > totalSize && stride > 0) {
-                    ((totalSize * 2) / (stride * 3)).coerceAtLeast(height)
-                } else rawSliceH
-                val yPlaneBytes = stride * sliceH
-                val uPlaneStart = baseOffset + yPlaneBytes
-                val vPlaneStart = uPlaneStart + (yPlaneBytes / 4)
-                val isSemiPlanar = colorFmt == 21 || colorFmt == 0x7FA30C00 || colorFmt == 0x7FA30C04
-
-                var idx = 0
-                for (oy in 0 until outH) {
-                    val sy = oy * step
-                    val yRowStart = baseOffset + sy * stride
-                    val uvY = sy shr 1
-                    for (ox in 0 until outW) {
-                        val sx = ox * step
-                        val uvX = sx shr 1
-                        val yPos = yRowStart + sx
-                        val yVal = if (yPos < baseOffset + totalSize) (buf.get(yPos).toInt() and 0xFF) else 16
-                        val uVal: Int
-                        val vVal: Int
-                        if (isSemiPlanar) {
-                            val uvPos = uPlaneStart + uvY * stride + uvX * 2
-                            uVal = if (uvPos < baseOffset + totalSize) (buf.get(uvPos).toInt() and 0xFF) - 128 else 0
-                            vVal = if (uvPos + 1 < baseOffset + totalSize) (buf.get(uvPos + 1).toInt() and 0xFF) - 128 else 0
-                        } else {
-                            val uPos = uPlaneStart + uvY * (stride / 2) + uvX
-                            val vPos = vPlaneStart + uvY * (stride / 2) + uvX
-                            uVal = if (uPos < baseOffset + totalSize) (buf.get(uPos).toInt() and 0xFF) - 128 else 0
-                            vVal = if (vPos < baseOffset + totalSize) (buf.get(vPos).toInt() and 0xFF) - 128 else 0
-                        }
-                        pixels[idx++] = yuvToRgbPixel(yVal, uVal, vVal)
-                    }
-                }
-                Bitmap.createBitmap(pixels, outW, outH, Bitmap.Config.ARGB_8888)
+            val image = codec.getOutputImage(outIdx) ?: return null
+            try {
+                if (image.planes.size >= 3) yuvImageToBitmap(image) else null
+            } finally {
+                image.close()
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "convertOutputToBitmap failed", e)
+        } catch (_: Exception) {
             null
         }
+    }
+
+    private fun yuvImageToBitmap(image: Image): Bitmap? {
+        val crop = image.cropRect
+        val srcW = if (crop != null && crop.width() > 0) crop.width() else image.width
+        val srcH = if (crop != null && crop.height() > 0) crop.height() else image.height
+        val cropLeft = crop?.left ?: 0
+        val cropTop = crop?.top ?: 0
+        if (srcW <= 0 || srcH <= 0) return null
+
+        val planes = image.planes
+        val yBuf = planes[0].buffer
+        val uBuf = planes[1].buffer
+        val vBuf = planes[2].buffer
+        val yRowStride = planes[0].rowStride
+        val yPixStride = planes[0].pixelStride
+        val uRowStride = planes[1].rowStride
+        val uPixStride = planes[1].pixelStride
+        val vRowStride = planes[2].rowStride
+        val vPixStride = planes[2].pixelStride
+
+        val is16Bit = image.format == 54 || (yPixStride >= 2 && yRowStride >= image.width * 2)
+
+        val dstW = THUMB_WIDTH
+        val dstH = (THUMB_WIDTH.toFloat() * srcH / srcW).toInt().coerceIn(1, THUMB_WIDTH * 2)
+        val pixels = IntArray(dstW * dstH)
+
+        var shift10 = 8
+        if (is16Bit) {
+            var hasHighBits = false
+            val midY = cropTop + srcH / 2
+            for (i in 0 until 24) {
+                val sx = cropLeft + (srcW * i / 24)
+                val pos = midY * yRowStride + sx * yPixStride
+                if (pos + 1 < yBuf.limit()) {
+                    val v16 = (yBuf.get(pos).toInt() and 0xFF) or
+                            ((yBuf.get(pos + 1).toInt() and 0xFF) shl 8)
+                    if ((v16 and 0xFC00) != 0) {
+                        hasHighBits = true
+                        break
+                    }
+                }
+            }
+            shift10 = if (hasHighBits) 8 else 2
+        }
+
+        val yLim = yBuf.limit()
+        val uLim = uBuf.limit()
+        val vLim = vBuf.limit()
+        var outIdx = 0
+
+        for (dy in 0 until dstH) {
+            val sy = cropTop + (dy * srcH / dstH)
+            val yRowOffset = sy * yRowStride
+            val uvY = sy shr 1
+            val uRowOffset = uvY * uRowStride
+            val vRowOffset = uvY * vRowStride
+
+            for (dx in 0 until dstW) {
+                val sx = cropLeft + (dx * srcW / dstW)
+                val uvX = sx shr 1
+
+                val yVal: Int
+                val uVal: Int
+                val vVal: Int
+
+                if (is16Bit) {
+                    val yPos = yRowOffset + sx * yPixStride
+                    val uPos = uRowOffset + uvX * uPixStride
+                    val vPos = vRowOffset + uvX * vPixStride
+                    if (yPos + 1 >= yLim || uPos + 1 >= uLim || vPos + 1 >= vLim) {
+                        pixels[outIdx++] = Color.BLACK
+                        continue
+                    }
+                    val y16 = (yBuf.get(yPos).toInt() and 0xFF) or ((yBuf.get(yPos + 1).toInt() and 0xFF) shl 8)
+                    val u16 = (uBuf.get(uPos).toInt() and 0xFF) or ((uBuf.get(uPos + 1).toInt() and 0xFF) shl 8)
+                    val v16 = (vBuf.get(vPos).toInt() and 0xFF) or ((vBuf.get(vPos + 1).toInt() and 0xFF) shl 8)
+                    yVal = (y16 ushr shift10) and 0xFF
+                    uVal = (u16 ushr shift10) and 0xFF
+                    vVal = (v16 ushr shift10) and 0xFF
+                } else {
+                    val yPos = yRowOffset + sx * yPixStride
+                    val uPos = uRowOffset + uvX * uPixStride
+                    val vPos = vRowOffset + uvX * vPixStride
+                    if (yPos >= yLim || uPos >= uLim || vPos >= vLim) {
+                        pixels[outIdx++] = Color.BLACK
+                        continue
+                    }
+                    yVal = yBuf.get(yPos).toInt() and 0xFF
+                    uVal = uBuf.get(uPos).toInt() and 0xFF
+                    vVal = vBuf.get(vPos).toInt() and 0xFF
+                }
+
+                pixels[outIdx++] = yuvToRgbPixel(yVal, uVal - 128, vVal - 128)
+            }
+        }
+
+        return Bitmap.createBitmap(pixels, dstW, dstH, Bitmap.Config.ARGB_8888)
+    }
+
+    /**
+     * تبدیل ByteBuffer خام با پشتیبانی دقیق از هر دو چیدمان ۱۰ بیتی:
+     * - I010 (Planar 10-bit در بیت‌های پایین ۰..۹ که خروجی c2.android.hevc.decoder است)
+     * - P010 (Semi-Planar 10-bit در بیت‌های بالا ۶..۱۵)
+     */
+    private fun rawYuvBufferToBitmap(
+        buf: java.nio.ByteBuffer,
+        bufferInfo: MediaCodec.BufferInfo,
+        fmt: MediaFormat
+    ): Bitmap? {
+        val width = fmt.getInteger(MediaFormat.KEY_WIDTH)
+        val height = fmt.getInteger(MediaFormat.KEY_HEIGHT)
+        if (width <= 0 || height <= 0) return null
+
+        val cropLeft = if (fmt.containsKey("crop-left")) fmt.getInteger("crop-left") else 0
+        val cropTop = if (fmt.containsKey("crop-top")) fmt.getInteger("crop-top") else 0
+        val cropRight = if (fmt.containsKey("crop-right")) fmt.getInteger("crop-right") else width - 1
+        val cropBottom = if (fmt.containsKey("crop-bottom")) fmt.getInteger("crop-bottom") else height - 1
+        val srcW = (cropRight - cropLeft + 1).coerceIn(1, width)
+        val srcH = (cropBottom - cropTop + 1).coerceIn(1, height)
+
+        val rawStride = if (fmt.containsKey(MediaFormat.KEY_STRIDE)) fmt.getInteger(MediaFormat.KEY_STRIDE) else width
+        val sliceHeight = if (fmt.containsKey(MediaFormat.KEY_SLICE_HEIGHT)) {
+            fmt.getInteger(MediaFormat.KEY_SLICE_HEIGHT).coerceAtLeast(height)
+        } else height
+        val colorFormat = if (fmt.containsKey(MediaFormat.KEY_COLOR_FORMAT)) {
+            fmt.getInteger(MediaFormat.KEY_COLOR_FORMAT)
+        } else 0
+
+        val is16Bit = colorFormat == 54 || bufferInfo.size >= width * height * 2
+        val dstW = THUMB_WIDTH
+        val dstH = (THUMB_WIDTH.toFloat() * srcH / srcW).toInt().coerceIn(1, THUMB_WIDTH * 2)
+        val pixels = IntArray(dstW * dstH)
+        val baseOffset = if (buf.position() > 0) buf.position() else 0
+        val limit = buf.limit()
+
+        if (is16Bit) {
+            val yRowStrideBytes = if (rawStride >= width * 2) rawStride else rawStride * 2
+            val yPlaneBytes = yRowStrideBytes * sliceHeight
+
+            // تشخیص دقیق P010 (بیت‌های بالا، Semi-Planar) در برابر I010 (بیت‌های پایین، Planar در c2.android.hevc.decoder)
+            var hasHighBits = false
+            val testRow = baseOffset + (cropTop + srcH / 2) * yRowStrideBytes
+            for (i in 0 until 24) {
+                val pos = testRow + (cropLeft + srcW * i / 24) * 2
+                if (pos + 1 < limit) {
+                    val v16 = (buf.get(pos).toInt() and 0xFF) or ((buf.get(pos + 1).toInt() and 0xFF) shl 8)
+                    if ((v16 and 0xFC00) != 0) {
+                        hasHighBits = true
+                        break
+                    }
+                }
+            }
+
+            val isP010SemiPlanar = colorFormat == 54 && hasHighBits
+            val shift10 = if (hasHighBits) 8 else 2
+
+            if (isP010SemiPlanar) {
+                val uvBase = baseOffset + yPlaneBytes
+                var outIdx = 0
+                for (dy in 0 until dstH) {
+                    val sy = cropTop + (dy * srcH / dstH)
+                    val yRow = baseOffset + sy * yRowStrideBytes
+                    val uvRow = uvBase + (sy shr 1) * yRowStrideBytes
+                    for (dx in 0 until dstW) {
+                        val sx = cropLeft + (dx * srcW / dstW)
+                        val yPos = yRow + sx * 2
+                        val uvPos = uvRow + (sx and -2) * 2
+                        if (yPos + 1 >= limit || uvPos + 3 >= limit) {
+                            pixels[outIdx++] = Color.BLACK
+                            continue
+                        }
+                        val y16 = (buf.get(yPos).toInt() and 0xFF) or ((buf.get(yPos + 1).toInt() and 0xFF) shl 8)
+                        val u16 = (buf.get(uvPos).toInt() and 0xFF) or ((buf.get(uvPos + 1).toInt() and 0xFF) shl 8)
+                        val v16 = (buf.get(uvPos + 2).toInt() and 0xFF) or ((buf.get(uvPos + 3).toInt() and 0xFF) shl 8)
+                        pixels[outIdx++] = yuvToRgbPixel(
+                            (y16 ushr shift10) and 0xFF,
+                            ((u16 ushr shift10) and 0xFF) - 128,
+                            ((v16 ushr shift10) and 0xFF) - 128
+                        )
+                    }
+                }
+            } else {
+                // چیدمان I010 Planar (خروجی پیش‌فرض c2.android.hevc.decoder برای 10-bit x265)
+                val uvRowStrideBytes = yRowStrideBytes shr 1
+                val uBase = baseOffset + yPlaneBytes
+                val vBase = uBase + uvRowStrideBytes * (sliceHeight shr 1)
+                var outIdx = 0
+                for (dy in 0 until dstH) {
+                    val sy = cropTop + (dy * srcH / dstH)
+                    val yRow = baseOffset + sy * yRowStrideBytes
+                    val uRow = uBase + (sy shr 1) * uvRowStrideBytes
+                    val vRow = vBase + (sy shr 1) * uvRowStrideBytes
+                    for (dx in 0 until dstW) {
+                        val sx = cropLeft + (dx * srcW / dstW)
+                        val yPos = yRow + sx * 2
+                        val uvOffset = (sx shr 1) * 2
+                        val uPos = uRow + uvOffset
+                        val vPos = vRow + uvOffset
+                        if (yPos + 1 >= limit || uPos + 1 >= limit || vPos + 1 >= limit) {
+                            pixels[outIdx++] = Color.BLACK
+                            continue
+                        }
+                        val y16 = (buf.get(yPos).toInt() and 0xFF) or ((buf.get(yPos + 1).toInt() and 0xFF) shl 8)
+                        val u16 = (buf.get(uPos).toInt() and 0xFF) or ((buf.get(uPos + 1).toInt() and 0xFF) shl 8)
+                        val v16 = (buf.get(vPos).toInt() and 0xFF) or ((buf.get(vPos + 1).toInt() and 0xFF) shl 8)
+                        pixels[outIdx++] = yuvToRgbPixel(
+                            (y16 ushr shift10) and 0xFF,
+                            ((u16 ushr shift10) and 0xFF) - 128,
+                            ((v16 ushr shift10) and 0xFF) - 128
+                        )
+                    }
+                }
+            }
+        } else {
+            val rowStride = rawStride.coerceAtLeast(width)
+            val ySize = rowStride * sliceHeight
+            val isSemiPlanar = colorFormat == 21 || colorFormat == 0x7FA30C00 || colorFormat == 0x7FA30C04
+            val uBase = baseOffset + ySize
+            val vBase = uBase + (ySize / 4)
+
+            var outIdx = 0
+            for (dy in 0 until dstH) {
+                val sy = cropTop + (dy * srcH / dstH)
+                val yRow = baseOffset + sy * rowStride
+                for (dx in 0 until dstW) {
+                    val sx = cropLeft + (dx * srcW / dstW)
+                    val yPos = yRow + sx
+                    if (yPos >= limit) {
+                        pixels[outIdx++] = Color.BLACK
+                        continue
+                    }
+                    val yVal = buf.get(yPos).toInt() and 0xFF
+                    val uVal: Int
+                    val vVal: Int
+                    if (isSemiPlanar) {
+                        val uvPos = uBase + (sy shr 1) * rowStride + (sx and -2)
+                        if (uvPos + 1 < limit) {
+                            uVal = buf.get(uvPos).toInt() and 0xFF
+                            vVal = buf.get(uvPos + 1).toInt() and 0xFF
+                        } else {
+                            uVal = 128; vVal = 128
+                        }
+                    } else {
+                        val uvOffset = (sy shr 1) * (rowStride shr 1) + (sx shr 1)
+                        if (vBase + uvOffset < limit) {
+                            uVal = buf.get(uBase + uvOffset).toInt() and 0xFF
+                            vVal = buf.get(vBase + uvOffset).toInt() and 0xFF
+                        } else {
+                            uVal = 128; vVal = 128
+                        }
+                    }
+                    pixels[outIdx++] = yuvToRgbPixel(yVal, uVal - 128, vVal - 128)
+                }
+            }
+        }
+
+        return Bitmap.createBitmap(pixels, dstW, dstH, Bitmap.Config.ARGB_8888)
     }
 
     private fun yuvToRgbPixel(y: Int, u: Int, v: Int): Int {

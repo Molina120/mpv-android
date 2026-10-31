@@ -13,7 +13,7 @@ object ThumbDiskCache {
     private const val TAG = "ThumbDiskCache"
     private const val DIR = "video_thumbs_v2"
     private const val PREFS = "thumb_cache_v2" // تغییر نسخه برای پاک شدن لیست سیاه نسخه‌های قبلی
-    private const val KEY_FAILED = "failed_ids_v60"
+    private const val KEY_FAILED = "failed_ids_v64"
 
     @Volatile private var cachedDir: File? = null
     private val failedMemoryCache = ConcurrentHashMap.newKeySet<Long>()
