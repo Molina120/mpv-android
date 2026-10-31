@@ -2,11 +2,12 @@
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:fadeScrollbars="false"
+    android:fadeScrollbars="true"
     android:overScrollMode="never"
     android:paddingHorizontal="18dp"
     android:paddingTop="8dp"
     android:paddingBottom="4dp"
+    android:scrollbars="vertical"
     android:verticalScrollbarPosition="left">
 
     <!-- focusableInTouchMode مانع از فوکوس خودکار EditText و باز شدن ناخواسته کیبورد در لحظه باز شدن منو می‌شود -->
