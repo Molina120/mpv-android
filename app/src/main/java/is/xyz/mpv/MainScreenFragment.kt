@@ -520,21 +520,15 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
 
     // ---------- مدیریت پیشرفته و دائمی بندانگشتی‌ها (پشتیبانی از 10-bit x265 و 4K HDR10+) ----------
 
-    /**
-     * کش دیسک مشترک با پلیر (ThumbDiskCache — حافظه دائمی filesDir تا با بستن
-     * برنامه یا پاکسازی کش سیستم حذف نشود). کلید فقط شناسه ویدیو است.
-     */
-    private fun getDiskCacheFile(appCtx: Context, video: VideoScanner.Video): File =
-        ThumbDiskCache.file(appCtx, video.id)
-
     private fun preloadDiskThumbnails(appCtx: Context, allFolders: List<VideoScanner.Folder>) {
         diskCacheExecutor.execute {
-            for (folder in allFolders) {
-                for (video in folder.videos) {
-                    if (thumbCache.get(video.id) != null) continue
-                    ThumbDiskCache.load(appCtx, video.id)?.let { bmp ->
-                        thumbCache.put(video.id, bmp)
-                    }
+            // ابتدا فقط ویدیوهای پوشه بازِ فعلی (یا حداکثر ۳۰ ویدیوی اول) را در رم بگذار
+            // تا کش LruCache سرریز نشود و صف دیسک برای کلیک کاربر آزاد بماند
+            val targetVideos = openFolder?.videos ?: allFolders.flatMap { it.videos.take(4) }.take(30)
+            for (video in targetVideos) {
+                if (thumbCache.get(video.id) != null) continue
+                ThumbDiskCache.load(appCtx, video.id)?.let { bmp ->
+                    thumbCache.put(video.id, bmp)
                 }
             }
         }
@@ -543,19 +537,22 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
     private fun loadThumb(video: VideoScanner.Video, imageView: ImageView) {
         imageView.tag = video.id
 
+        // ۱. بررسی فوری در کش رم (بدون هیچ تاخیری در ترد اصلی)
         thumbCache.get(video.id)?.let {
             imageView.setImageBitmap(it)
             return
         }
 
         imageView.setImageDrawable(null)
-        if (video.id in thumbFailed) return
-
         val appCtx = requireContext().applicationContext
-        val cacheFile = getDiskCacheFile(appCtx, video)
 
-        if (cacheFile.exists() && cacheFile.length() > 0L) {
+        // ۲. بررسی کش دیسک (حتی اگر قبلاً در thumbFailed بوده ولی پلیر mpv برایش عکس گرفته است)
+        if (ThumbDiskCache.exists(appCtx, video.id)) {
+            thumbFailed.remove(video.id)
             diskCacheExecutor.execute {
+                // اگر کاربر سریع اسکرول کرده و این ImageView دیگر متعلق به این ویدیو نیست، بیهوده دیکد نکن
+                if (imageView.tag != video.id) return@execute
+
                 val cachedBmp = thumbCache.get(video.id)
                     ?: ThumbDiskCache.load(appCtx, video.id)?.also {
                         thumbCache.put(video.id, it)
@@ -565,39 +562,32 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                         if (imageView.tag == video.id) imageView.setImageBitmap(cachedBmp)
                     }
                 } else {
-                    cacheFile.delete()
-                    extractAndSaveThumb(appCtx, video, cacheFile, imageView)
+                    ThumbDiskCache.file(appCtx, video.id).delete()
+                    extractAndSaveThumb(appCtx, video, imageView)
                 }
             }
             return
         }
 
-        extractAndSaveThumb(appCtx, video, cacheFile, imageView)
+        // ۳. اگر در دیسک نبود و قبلاً شکست خورده، دوباره CPU را درگیر نکن
+        if (video.id in thumbFailed || ThumbDiskCache.isFailed(appCtx, video.id)) return
+
+        extractAndSaveThumb(appCtx, video, imageView)
     }
 
     private fun extractAndSaveThumb(
         appCtx: Context,
         video: VideoScanner.Video,
-        cacheFile: File,
         imageView: ImageView
     ) {
         if (!thumbInProgress.add(video.id)) return
 
         thumbDecodeExecutor.execute {
             try {
-                // ۱. تلاش اول با MediaMetadataRetriever (سریع برای ویدیوهای ۸ بیتی استاندارد)
+                // ۱. تلاش اول با MediaMetadataRetriever
                 var rawBmp: Bitmap? = retrieverFrame(appCtx, video)
 
-                // ۲. تلاش دوم با MediaCodec در حالت ByteBuffer پردازنده (پشتیبانی از 10-bit P010 و 8-bit)
-                if (rawBmp == null || isMostlyBlack(rawBmp)) {
-                    val codecBmp = decodeFrameWithCpuMediaCodec(appCtx, video)
-                    if (codecBmp != null && (!isMostlyBlack(codecBmp) || rawBmp == null)) {
-                        if (rawBmp != null && rawBmp !== codecBmp) rawBmp.recycle()
-                        rawBmp = codecBmp
-                    }
-                }
-
-                // ۳. تلاش نهایی با بندانگشتی پیش‌فرض سیستم
+                // ۲. تلاش دوم با بندانگشتی سیستم (بسیار سریع‌تر از MediaCodec در صورت وجود در MediaStore)
                 if (rawBmp == null || isMostlyBlack(rawBmp)) {
                     val sysBmp = loadSystemThumbnail(appCtx, video)
                     if (sysBmp != null && (!isMostlyBlack(sysBmp) || rawBmp == null)) {
@@ -606,24 +596,22 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                     }
                 }
 
+                // ۳. تلاش سوم با MediaCodec برای 10-bit HEVC / x265 / HDR10+
+                if (rawBmp == null || isMostlyBlack(rawBmp)) {
+                    val codecBmp = decodeFrameWithCpuMediaCodec(appCtx, video)
+                    if (codecBmp != null && (!isMostlyBlack(codecBmp) || rawBmp == null)) {
+                        if (rawBmp != null && rawBmp !== codecBmp) rawBmp.recycle()
+                        rawBmp = codecBmp
+                    }
+                }
+
                 if (rawBmp != null) {
                     val finalBmp = scaleCenterCrop(rawBmp, THUMB_WIDTH, THUMB_HEIGHT)
                     if (finalBmp !== rawBmp) rawBmp.recycle()
 
                     thumbCache.put(video.id, finalBmp)
-
-                    try {
-                        val tmpFile = File(cacheFile.parentFile, "${cacheFile.name}.tmp")
-                        FileOutputStream(tmpFile).use { out ->
-                            finalBmp.compress(Bitmap.CompressFormat.JPEG, 90, out)
-                            out.flush()
-                        }
-                        if (tmpFile.exists() && tmpFile.length() > 0L) {
-                            tmpFile.renameTo(cacheFile)
-                        }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Failed to save thumbnail: ${video.name}", e)
-                    }
+                    ThumbDiskCache.save(appCtx, video.id, finalBmp)
+                    thumbFailed.remove(video.id)
 
                     imageView.post {
                         if (isAdded && imageView.tag == video.id) {
@@ -640,6 +628,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                     }
                 } else {
                     thumbFailed.add(video.id)
+                    ThumbDiskCache.markFailed(appCtx, video.id)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "thumbnail failed: ${video.name}", e)
@@ -683,17 +672,23 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             val candidatesUs = if (durationMs > 10_000L) {
                 longArrayOf(
                     durationMs * 150L, // 15%
-                    durationMs * 250L, // 25%
-                    durationMs * 100L, // 10%
-                    15_000_000L
+                    durationMs * 280L, // 28%
+                    durationMs * 80L,  // 8%
+                    0L
                 )
             } else {
-                longArrayOf(3_000_000L, 1_000_000L, 0L)
+                longArrayOf(durationMs * 300L, 1_000_000L, 0L)
             }
 
             var fallbackFrame: Bitmap? = null
-            for (timeUs in candidatesUs) {
-                val frame = extractSingleFrame(r, timeUs) ?: continue
+            for ((index, timeUs) in candidatesUs.withIndex()) {
+                val frame = extractSingleFrame(r, timeUs)
+                if (frame == null) {
+                    // اگر در همان تلاش اول نال برگشت، یعنی کدک (مثلاً 10-bit HEVC) پشتیبانی نمی‌شود؛
+                    // پس وقت را روی بقیه زمان‌ها تلف نکن و سریع برو سراغ MediaCodec
+                    if (index == 0) return extractSingleFrame(r, 0L)
+                    continue
+                }
                 if (!isMostlyBlack(frame)) {
                     if (fallbackFrame != null && fallbackFrame !== frame) fallbackFrame.recycle()
                     return frame
@@ -1226,7 +1221,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         }
 
         val x = ((scaled.width - targetW) / 2).coerceAtLeast(0)
-        val y = ((scaled.height - targetW) / 2).coerceAtLeast(0)
+        val y = ((scaled.height - targetH) / 2).coerceAtLeast(0) // اصلاح باگ: targetW به targetH
         val cropped = Bitmap.createBitmap(
             scaled,
             x,

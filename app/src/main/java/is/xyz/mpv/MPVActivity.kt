@@ -2376,25 +2376,34 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         val appCtx = applicationContext
         if (ThumbDiskCache.exists(appCtx, vid)) return
         val token = ++thumbCaptureToken
-        eventUiHandler.postDelayed({
-            if (token != thumbCaptureToken || isFinishing || isDestroyed) return@postDelayed
-            if (ThumbDiskCache.exists(appCtx, vid)) return@postDelayed
-            MpvBg.post {
-                try {
-                    // فقط وقتی ویدیو واقعاً در حال پخش است
-                    val fmt = MPVLib.getPropertyString("video-format")
-                    if (fmt.isNullOrEmpty()) return@post
-                    val bmp = MPVLib.grabThumbnail(560) ?: return@post
-                    if (!ThumbDiskCache.isDark(bmp)) {
-                        if (ThumbDiskCache.save(appCtx, vid, bmp))
-                            ThumbDiskCache.clearFailed(appCtx, vid)
+
+        fun tryCapture(delayMs: Long, isRetry: Boolean) {
+            eventUiHandler.postDelayed({
+                if (token != thumbCaptureToken || isFinishing || isDestroyed) return@postDelayed
+                if (ThumbDiskCache.exists(appCtx, vid)) return@postDelayed
+                MpvBg.post {
+                    try {
+                        val fmt = MPVLib.getPropertyString("video-format")
+                        if (fmt.isNullOrEmpty()) return@post
+                        val bmp = MPVLib.grabThumbnail(560) ?: return@post
+                        val dark = ThumbDiskCache.isDark(bmp)
+                        if (!dark || isRetry) {
+                            if (ThumbDiskCache.save(appCtx, vid, bmp)) {
+                                ThumbDiskCache.clearFailed(appCtx, vid)
+                            }
+                        } else {
+                            // اگر در ثانیه ۱.۵ فریم سیاه بود، در ثانیه ۶ دوباره امتحان کن
+                            eventUiHandler.post { tryCapture(4500L, true) }
+                        }
+                        try { bmp.recycle() } catch (_: Exception) { }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "thumb capture failed", e)
                     }
-                    try { bmp.recycle() } catch (_: Exception) { }
-                } catch (e: Exception) {
-                    Log.w(TAG, "thumb capture failed", e)
                 }
-            }
-        }, 8000)
+            }, delayMs)
+        }
+
+        tryCapture(1500L, false)
     }
 
     /**

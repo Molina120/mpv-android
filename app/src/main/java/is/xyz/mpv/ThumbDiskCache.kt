@@ -7,102 +7,128 @@ import android.graphics.Color
 import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
+import java.util.concurrent.ConcurrentHashMap
 
-/**
- * کش دیسک بندانگشتی‌ها — مشترک بین مرورگر و پلیر.
- *
- * - کلید فقط شناسه ویدیو است تا هم مرورگر (که dateModified دارد) و هم پلیر
- *   (که ندارد) بتوانند بخوانند/بنویسند.
- * - لیست سیاه ماندگار: ویدیوهایی که ساخت بندانگشتی‌شان ناموفق بود، تا رفرش
- *   بعدی دوباره امتحان نمی‌شوند (جلوگیری از سوختن CPU/باتری در هر اجرا).
- */
 object ThumbDiskCache {
     private const val TAG = "ThumbDiskCache"
     private const val DIR = "video_thumbs_v2"
     private const val PREFS = "thumb_cache_v1"
     private const val KEY_FAILED = "failed_ids"
 
-    fun file(context: Context, videoId: Long): File {
-        // حافظه دائمی filesDir: برخلاف cacheDir توسط سیستم/بهینه‌سازها پاک نمی‌شود
-        val dir = File(context.filesDir, DIR).apply { mkdirs() }
-        return File(dir, "thumb_$videoId.jpg")
+    @Volatile private var cachedDir: File? = null
+    private val failedMemoryCache = ConcurrentHashMap.newKeySet<Long>()
+    @Volatile private var failedLoaded = false
+
+    private fun ensureDir(context: Context): File {
+        return cachedDir ?: synchronized(this) {
+            cachedDir ?: File(context.applicationContext.filesDir, DIR).apply {
+                mkdirs()
+                cachedDir = this
+            }
+        }
     }
+
+    private fun ensureFailedLoaded(context: Context) {
+        if (failedLoaded) return
+        synchronized(this) {
+            if (failedLoaded) return
+            try {
+                val set = context.applicationContext
+                    .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .getStringSet(KEY_FAILED, emptySet()) ?: emptySet()
+                for (s in set) s.toLongOrNull()?.let { failedMemoryCache.add(it) }
+            } catch (_: Exception) { }
+            failedLoaded = true
+        }
+    }
+
+    fun file(context: Context, videoId: Long): File =
+        File(ensureDir(context), "thumb_$videoId.jpg")
 
     fun exists(context: Context, videoId: Long): Boolean {
         val f = file(context, videoId)
-        return f.exists() && f.length() > 0
+        return f.exists() && f.length() > 0L
     }
 
     fun load(context: Context, videoId: Long): Bitmap? {
         return try {
             val f = file(context, videoId)
-            if (f.exists() && f.length() > 0) BitmapFactory.decodeFile(f.absolutePath) else null
+            if (!f.exists() || f.length() <= 0L) return null
+            val opts = BitmapFactory.Options().apply {
+                // نصف شدن مصرف رم در LruCache و دو برابر شدن سرعت لود از دیسک
+                inPreferredConfig = Bitmap.Config.RGB_565
+            }
+            BitmapFactory.decodeFile(f.absolutePath, opts)
         } catch (e: Exception) {
             null
         }
     }
 
-    /** ذخیره با حداکثر عرض 560 (متناسب با کادر بندانگشتی) و کیفیت JPEG 92% */
     fun save(context: Context, videoId: Long, bmp: Bitmap): Boolean {
         return try {
             val out = if (bmp.width > 560) {
                 val h = (560f * bmp.height / bmp.width).toInt().coerceAtLeast(1)
                 Bitmap.createScaledBitmap(bmp, 560, h, true)
             } else bmp
-            FileOutputStream(file(context, videoId)).use { fos ->
-                out.compress(Bitmap.CompressFormat.JPEG, 92, fos)
+
+            val targetFile = file(context, videoId)
+            val tmpFile = File(targetFile.parentFile, "${targetFile.name}.tmp")
+            FileOutputStream(tmpFile).use { fos ->
+                out.compress(Bitmap.CompressFormat.JPEG, 90, fos)
+                fos.flush()
             }
             if (out !== bmp) out.recycle()
-            true
+
+            if (tmpFile.exists() && tmpFile.length() > 0L) {
+                tmpFile.renameTo(targetFile)
+                clearFailed(context, videoId)
+                true
+            } else {
+                tmpFile.delete()
+                false
+            }
         } catch (e: Exception) {
             Log.w(TAG, "save failed for $videoId", e)
             false
         }
     }
 
-    private fun failedSet(context: Context): MutableSet<String> {
-        return try {
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .getStringSet(KEY_FAILED, emptySet())?.toMutableSet() ?: mutableSetOf()
-        } catch (e: Exception) {
-            mutableSetOf()
-        }
+    fun isFailed(context: Context, videoId: Long): Boolean {
+        ensureFailedLoaded(context)
+        return failedMemoryCache.contains(videoId)
     }
 
-    fun isFailed(context: Context, videoId: Long): Boolean =
-        failedSet(context).contains(videoId.toString())
-
     fun markFailed(context: Context, videoId: Long) {
-        try {
-            val s = failedSet(context)
-            if (s.add(videoId.toString())) {
-                context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                    .putStringSet(KEY_FAILED, s).apply()
-            }
-        } catch (e: Exception) {
+        ensureFailedLoaded(context)
+        if (failedMemoryCache.add(videoId)) {
+            persistFailed(context)
         }
     }
 
     fun clearFailed(context: Context, videoId: Long) {
-        try {
-            val s = failedSet(context)
-            if (s.remove(videoId.toString())) {
-                context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                    .putStringSet(KEY_FAILED, s).apply()
-            }
-        } catch (e: Exception) {
+        ensureFailedLoaded(context)
+        if (failedMemoryCache.remove(videoId)) {
+            persistFailed(context)
         }
     }
 
     fun clearAllFailed(context: Context) {
+        ensureFailedLoaded(context)
+        failedMemoryCache.clear()
         try {
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                .remove(KEY_FAILED).apply()
-        } catch (e: Exception) {
-        }
+            context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit().remove(KEY_FAILED).apply()
+        } catch (_: Exception) { }
     }
 
-    /** تشخیص فریم سیاه/تاریک (نسخه سبک برای استفاده پلیر) */
+    private fun persistFailed(context: Context) {
+        try {
+            val strSet = failedMemoryCache.map { it.toString() }.toSet()
+            context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit().putStringSet(KEY_FAILED, strSet).apply()
+        } catch (_: Exception) { }
+    }
+
     fun isDark(bmp: Bitmap): Boolean {
         val w = bmp.width
         val h = bmp.height
