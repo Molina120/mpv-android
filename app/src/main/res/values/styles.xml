@@ -38,6 +38,9 @@
     <style name="AppTheme.Preference" parent="Theme.Material3.Dark.NoActionBar">
         <item name="toolbarStyle">@style/AppTheme.Toolbar.Style</item>
         <item name="alertDialogTheme">@style/AppTheme.Preference.AlertDialog</item>
+        <item name="android:windowBackground">#000000</item>
+        <item name="android:colorBackground">#000000</item>
+        <item name="colorSurface">#000000</item>
     </style>
 
     <style name="AppTheme.Toolbar.Style" parent="Widget.Material3.Toolbar">

@@ -291,6 +291,7 @@ object SkipRangeManager {
             .setNegativeButton(R.string.dialog_cancel, null)
             .setOnDismissListener { onDismiss() }
             .create()
+        alertDialog.show()
 
         alertDialog.window?.setSoftInputMode(
             WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN or
@@ -298,6 +299,8 @@ object SkipRangeManager {
         )
 
         SubtitleStyleManager.showImmersiveDialog(context, alertDialog, maxHeightRatio = 0.90)
+        // Focus the switch for D-pad control (after immersive setup)
+        switchSkipEnabled.post { switchSkipEnabled.requestFocus() }
 
         // عملکرد دکمه پاکسازی درجا بدون بستن اجباری دیالوگ
         alertDialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.setOnClickListener {
