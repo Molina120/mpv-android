@@ -384,7 +384,15 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         lastPlayedId = WatchTracker.lastPlayedId(ctx)
         newVideoIds = WatchTracker.getNewIds(ctx)
         updateFab()
-        (binding.videoList.adapter as? BrowserAdapter)?.notifyDataSetChanged()
+        // رفرش کامل لیست برای اطمینان از نمایش وضعیت به‌روز (به‌جای فقط notifyDataSetChanged)
+        if (openFolder != null) {
+            val updated = folders.find { it.name == openFolder!!.name }
+            if (updated != null) showVideos(updated) else showFolders()
+        } else {
+            // فقط اگر لیست خالی نیست، دوباره نمایش بده تا اسکرول به‌هم نریزد
+            if (folders.isNotEmpty()) showFolders()
+            else (binding.videoList.adapter as? BrowserAdapter)?.notifyDataSetChanged()
+        }
     }
 
     private fun updateFab() {
