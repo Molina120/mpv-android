@@ -1,13 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:orientation="vertical" android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+        android:clipChildren="false"
+        android:clipToPadding="false">
 
     <!-- Since this dialog does not scroll, don't add too many buttons here! -->
 
     <TableRow
         android:layout_width="match_parent"
-        android:layout_height="wrap_content">
+        android:layout_height="wrap_content"
+        android:clipChildren="false"
+        android:clipToPadding="false">
 
         <Button
             android:id="@+id/audioBtn"
@@ -31,7 +35,9 @@
     <!-- ردیف جدید: شخصی‌سازی زیرنویس و پرش خودکار زمانی -->
     <TableRow
         android:layout_width="match_parent"
-        android:layout_height="wrap_content">
+        android:layout_height="wrap_content"
+        android:clipChildren="false"
+        android:clipToPadding="false">
 
         <Button
             android:id="@+id/subStyleBtn"
@@ -71,7 +77,9 @@
     <TableRow
         android:id="@+id/rowChapter"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content">
+        android:layout_height="wrap_content"
+        android:clipChildren="false"
+        android:clipToPadding="false">
 
         <Button
             android:id="@+id/chapterBtn"

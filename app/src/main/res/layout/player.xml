@@ -3,7 +3,9 @@
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    xmlns:app="http://schemas.android.com/apk/res-auto">
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+        android:clipChildren="false"
+        android:clipToPadding="false">
 
     <is.xyz.mpv.MPVView
         android:id="@+id/player"
@@ -14,7 +16,9 @@
     <RelativeLayout
         android:id="@+id/outside"
         android:layout_width="match_parent"
-        android:layout_height="match_parent">
+        android:layout_height="match_parent"
+        android:clipChildren="false"
+        android:clipToPadding="false">
 
         <LinearLayout
             android:id="@+id/controls"
@@ -26,7 +30,9 @@
             android:layout_marginTop="60dp"
             android:layout_marginBottom="60dp"
             android:background="#bf000000"
-            android:orientation="vertical">
+            android:orientation="vertical"
+        android:clipChildren="false"
+        android:clipToPadding="false">
 
             <LinearLayout
                 android:id="@+id/controls_title_group"
@@ -34,7 +40,9 @@
                 android:layout_height="match_parent"
                 android:orientation="vertical"
                 android:visibility="gone"
-                tools:visibility="visible">
+                tools:visibility="visible"
+        android:clipChildren="false"
+        android:clipToPadding="false">
 
                 <!-- These two are only used for audio -->
                 <TextView
@@ -77,7 +85,9 @@
                 android:layout_height="match_parent"
                 android:layoutDirection="ltr"
                 android:orientation="horizontal"
-                android:weightSum="100">
+                android:weightSum="100"
+        android:clipChildren="false"
+        android:clipToPadding="false">
 
                 <ImageButton
                     android:id="@+id/prevBtn"
@@ -134,7 +144,9 @@
                 android:layout_height="match_parent"
                 android:layoutDirection="ltr"
                 android:gravity="center"
-                android:orientation="horizontal">
+                android:orientation="horizontal"
+        android:clipChildren="false"
+        android:clipToPadding="false">
 
                 <ImageButton
                     android:id="@+id/cycleAudioBtn"
@@ -228,7 +240,9 @@
             android:minHeight="44dp"
             android:orientation="horizontal"
             android:paddingStart="16dp"
-            android:paddingEnd="6dp">
+            android:paddingEnd="6dp"
+        android:clipChildren="false"
+        android:clipToPadding="false">
 
             <!-- اسم فایل ویدیو: هم‌تراز و یکپارچه با دکمه‌های سمت راست -->
             <TextView

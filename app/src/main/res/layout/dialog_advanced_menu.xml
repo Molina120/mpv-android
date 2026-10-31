@@ -5,12 +5,16 @@
 
     <LinearLayout
         android:orientation="vertical" android:layout_width="match_parent"
-        android:layout_height="wrap_content">
+        android:layout_height="wrap_content"
+        android:clipChildren="false"
+        android:clipToPadding="false">
 
         <TableRow
             android:id="@+id/rowVideo1"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content">
+            android:layout_height="wrap_content"
+        android:clipChildren="false"
+        android:clipToPadding="false">
 
             <Button
                 android:id="@+id/contrastBtn"
@@ -35,7 +39,9 @@
         <TableRow
             android:id="@+id/rowVideo2"
             android:layout_width="match_parent"
-            android:layout_height="match_parent">
+            android:layout_height="match_parent"
+        android:clipChildren="false"
+        android:clipToPadding="false">
 
             <Button
                 android:id="@+id/gammaBtn"
@@ -59,7 +65,9 @@
         <TableRow
             android:id="@+id/rowSubSeek"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content">
+            android:layout_height="wrap_content"
+        android:clipChildren="false"
+        android:clipToPadding="false">
 
             <Button
                 android:id="@+id/subSeekBtn"
@@ -94,7 +102,9 @@
 
         <TableRow
             android:layout_width="match_parent"
-            android:layout_height="wrap_content">
+            android:layout_height="wrap_content"
+        android:clipChildren="false"
+        android:clipToPadding="false">
 
             <Button
                 android:id="@+id/statsBtn"
@@ -139,7 +149,9 @@
 
         <TableRow
             android:layout_width="match_parent"
-            android:layout_height="match_parent">
+            android:layout_height="match_parent"
+        android:clipChildren="false"
+        android:clipToPadding="false">
 
             <Button
                 android:id="@+id/audioDelayBtn"
