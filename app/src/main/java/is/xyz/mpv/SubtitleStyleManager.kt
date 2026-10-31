@@ -333,25 +333,28 @@ object SubtitleStyleManager {
             colorViews.forEachIndexed { idx, tv ->
                 val opt = textColors[idx]
                 val selected = opt.hex.equals(currentColor, ignoreCase = true)
-                val fill = Color.parseColor(opt.hex)
-                // چیپ سفید روی دیالوگ سفید: همیشه حلقه خاکستری مرئی داشته باشد
+                val focused = tv.isFocused
                 val isWhiteChip = opt.hex.equals("#FFFFFF", ignoreCase = true)
+
                 tv.background = GradientDrawable().apply {
                     shape = GradientDrawable.OVAL
-                    setColor(fill)
-                    setStroke(
-                        dp(context, if (selected) 3f else 1.5f),
-                        when {
-                            selected && isWhiteChip -> Color.parseColor("#555555")
-                            selected -> Color.WHITE
-                            else -> Color.parseColor("#999999")
-                        }
-                    )
+                    setColor(Color.parseColor(opt.hex))
+                    when {
+                        focused -> setStroke(dp(context, 3f), Color.parseColor("#00B0FF"))
+                        selected -> setStroke(dp(context, 2.5f), Color.parseColor("#212121"))
+                        else -> setStroke(dp(context, 1f), Color.parseColor("#9E9E9E"))
+                    }
                 }
                 tv.text = if (selected) "✓" else ""
-                tv.setTextColor(if (isWhiteChip) Color.parseColor("#555555") else Color.BLACK)
-                tv.scaleX = if (selected) 1.12f else 1.0f
-                tv.scaleY = if (selected) 1.12f else 1.0f
+                tv.setTextColor(if (isWhiteChip) Color.parseColor("#333333") else Color.BLACK)
+                val scale = when {
+                    focused -> 1.22f
+                    selected -> 1.10f
+                    else -> 1.0f
+                }
+                tv.scaleX = scale
+                tv.scaleY = scale
+                tv.elevation = if (focused) dp(context, 4f).toFloat() else 0f
             }
         }
 
@@ -364,13 +367,15 @@ object SubtitleStyleManager {
                     marginStart = chipMargin
                 }
                 isFocusable = true
-                isFocusableInTouchMode = true
-                foreground = context.getDrawable(R.drawable.item_focus_selector)
+                isFocusableInTouchMode = false // بسیار مهم برای کارکرد صحیح با ریموت تلویزیون
                 gravity = Gravity.CENTER
                 setTextColor(Color.BLACK)
                 textSize = 15f
                 paint.isFakeBoldText = true
                 contentDescription = context.getString(opt.nameRes)
+                setOnFocusChangeListener { _, _ ->
+                    refreshColorChips()
+                }
                 setOnClickListener {
                     if (!opt.hex.equals(currentColor, ignoreCase = true)) {
                         currentColor = opt.hex
@@ -389,41 +394,55 @@ object SubtitleStyleManager {
             bgViews.forEachIndexed { idx, tv ->
                 val opt = bgOptions[idx]
                 val selected = opt.id == currentBgId
+                val focused = tv.isFocused
+
                 tv.background = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
                     cornerRadius = dp(context, 8f).toFloat()
-                    // روی دیالوگ سفید: گزینه انتخاب‌نشده خاکستری روشن با متن تیره باشد تا دیده شود
                     setColor(
-                        if (selected) Color.parseColor("#7E57C2")
-                        else Color.parseColor("#E8E8E8")
+                        when {
+                            selected -> Color.parseColor("#0077C2")
+                            focused -> Color.parseColor("#D1F2FF")
+                            else -> Color.parseColor("#E8E8E8")
+                        }
                     )
                     setStroke(
-                        dp(context, 1f),
-                        if (selected) Color.WHITE else Color.parseColor("#BDBDBD")
+                        dp(context, if (focused) 2.5f else 1f),
+                        when {
+                            focused -> Color.parseColor("#00B0FF")
+                            selected -> Color.WHITE
+                            else -> Color.parseColor("#BDBDBD")
+                        }
                     )
                 }
-                tv.setTextColor(if (selected) Color.WHITE else Color.parseColor("#424242"))
-                tv.paint.isFakeBoldText = selected
+                tv.setTextColor(
+                    if (selected) Color.WHITE else Color.parseColor("#212121")
+                )
+                tv.paint.isFakeBoldText = selected || focused
+                val scale = if (focused) 1.08f else 1.0f
+                tv.scaleX = scale
+                tv.scaleY = scale
             }
         }
 
         bgOptions.forEach { opt ->
             val tv = TextView(context).apply {
-                // عرض wrap_content تا متن کامل با درصد دیده شود (داخل HorizontalScrollView)
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, dp(context, 36f)
                 ).apply {
-                    marginStart = dp(context, 3f)
-                    marginEnd = dp(context, 3f)
+                    marginStart = dp(context, 4f)
+                    marginEnd = dp(context, 4f)
                 }
                 isFocusable = true
-                isFocusableInTouchMode = true
-                foreground = context.getDrawable(R.drawable.item_focus_selector)
+                isFocusableInTouchMode = false
                 gravity = Gravity.CENTER
                 text = context.getString(opt.nameRes)
                 textSize = 11.5f
                 maxLines = 1
                 setPadding(dp(context, 12f), 0, dp(context, 12f), 0)
+                setOnFocusChangeListener { _, _ ->
+                    refreshBgChips()
+                }
                 setOnClickListener {
                     if (opt.id != currentBgId) {
                         currentBgId = opt.id
@@ -515,7 +534,8 @@ object SubtitleStyleManager {
             commitNow()
         }
 
-        val alertDialog = AlertDialog.Builder(context)
+        view.setBackgroundResource(R.drawable.dialog_dark_bg)
+        val alertDialog = AlertDialog.Builder(context, R.style.AppTheme_DarkDialog)
             .setTitle(R.string.subtitle_style_title)
             .setView(view)
             .setPositiveButton(R.string.dialog_ok) { dialog, _ -> dialog.dismiss() }

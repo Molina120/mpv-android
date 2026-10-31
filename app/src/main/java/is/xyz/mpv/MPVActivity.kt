@@ -1019,12 +1019,18 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
     }
 
     private fun updateSelectedDpadButton() {
-        dpadButtons().forEachIndexed { i, child ->
-            if (i == btnSelected) {
-                getSelectableBg()?.let { child.background = it }
-                    ?: child.setBackgroundColor(Color.parseColor("#4DFFFFFF"))
+        val buttons = dpadButtons().toList()
+        buttons.forEachIndexed { index, view ->
+            val selected = index == btnSelected
+            view.isSelected = selected
+            if (selected) {
+                view.setBackgroundResource(R.drawable.item_focus_selector)
+                view.scaleX = 1.18f
+                view.scaleY = 1.18f
             } else {
-                child.setBackgroundColor(Color.TRANSPARENT)
+                view.background = null
+                view.scaleX = 1.0f
+                view.scaleY = 1.0f
             }
         }
     }
@@ -1517,16 +1523,23 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             restoreState: StateRestoreCallback) {
         lateinit var dialog: AlertDialog
 
-        val builder = AlertDialog.Builder(this)
+        val builder = AlertDialog.Builder(this, R.style.AppTheme_DarkDialog)
         val dialogView = LayoutInflater.from(builder.context).inflate(layoutRes, null)
+        dialogView.setBackgroundResource(R.drawable.dialog_dark_bg)
 
-        val isTv = Utils.isTv(this)
+        var firstFocusableBtn: Button? = null
         for (button in buttons) {
-            val buttonView = dialogView.findViewById<Button>(button.idRes)
-            if (isTv) {
-                buttonView.isFocusable = true
-                buttonView.isFocusableInTouchMode = true
-                getSelectableBg()?.let { buttonView.background = it }
+            val buttonView = dialogView.findViewById<Button>(button.idRes) ?: continue
+            buttonView.isFocusable = true
+            buttonView.isFocusableInTouchMode = false
+            buttonView.setBackgroundResource(R.drawable.item_focus_selector)
+            buttonView.setTextColor(Color.parseColor("#FFFFFF"))
+            buttonView.setOnFocusChangeListener { v, hasFocus ->
+                val scale = if (hasFocus) 1.05f else 1.0f
+                v.animate().scaleX(scale).scaleY(scale).setDuration(120).start()
+            }
+            if (firstFocusableBtn == null && buttonView.visibility == View.VISIBLE) {
+                firstFocusableBtn = buttonView
             }
             buttonView.setOnClickListener {
                 val ret = button.handler()
@@ -1552,6 +1565,7 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             dialog = create()
         }
         dialog.show()
+        firstFocusableBtn?.post { firstFocusableBtn.requestFocus() }
     }
 
     private fun openTopMenu() {
