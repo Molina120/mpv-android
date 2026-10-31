@@ -144,37 +144,12 @@ object SubtitleNormalizer : MPVLib.EventObserver {
     }
 
     /**
-     * جبران نبود mirror در bidi موتور libass: در متن راست‌به‌چپ، فقط جفت‌کاراکترهای
-     * Bidi_Mirrored یونیکد ( ) [ ] { } را از قبل جابه‌جا می‌کنیم تا خروجی نهایی درست دیده شود.
-     * (تست‌شده با libass واقعی: بدون این کار پرانتزها جابه‌جا نمایش داده می‌شوند)
-     * نکته: «» ‹› در یونیکد Bidi_Mirrored نیستند — جابه‌جا کردن‌شان گیومه را برعکس می‌کند!
+     * غیرفعال شد (v38): جابه‌جایی پرانتزها در رشته منطقی، جفت‌براکت bidi را می‌شکند
+     * و باعث قرارگیری پرانتز دور متن اشتباه می‌شود. libass خودش bidi را انجام می‌دهد؛
+     * دستکاری نمی‌کنیم.
      */
     private fun mirrorForLibass(s: String): String {
-        var hasRtl = false
-        for (c in s) {
-            val d = Character.getDirectionality(c)
-            if (d == Character.DIRECTIONALITY_RIGHT_TO_LEFT ||
-                d == Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC) {
-                hasRtl = true
-                break
-            }
-        }
-        if (!hasRtl) return s
-        val sb = StringBuilder(s.length)
-        for (c in s) {
-            sb.append(
-                when (c) {
-                    '(' -> ')'
-                    ')' -> '('
-                    '[' -> ']'
-                    ']' -> '['
-                    '{' -> '}'
-                    '}' -> '{'
-                    else -> c
-                }
-            )
-        }
-        return sb.toString()
+        return s
     }
 
     private fun renderSubtitleInternal(rawText: String) {
@@ -422,15 +397,13 @@ object SubtitleNormalizer : MPVLib.EventObserver {
 
         if (core.isBlank()) return line
 
+        // v38: بدون کنترل‌های bidi — libass خودش از روی محتوا جهت را تشخیص می‌دهد
         val normalized = normalizeSubtitleLine(core)
-            .removePrefix("\u200F\u202B")
-            .removeSuffix("\u202C\u200F")
-        return "\u200F\u202B" + startTags + normalized + endTags + "\u202C\u200F"
+        return startTags + normalized + endTags
     }
 
     fun normalizeSubtitleLine(input: String?): String {
         if (input.isNullOrEmpty()) return input ?: ""
-        if (input.startsWith("\u200F\u202B")) return input
 
         var line = input
             .replace("\u200E", "")
@@ -517,7 +490,9 @@ object SubtitleNormalizer : MPVLib.EventObserver {
             line = "- $line"
         }
 
-        return "\u200F\u202B$line\u202C\u200F"
+        // v38: کنترل‌های bidi (U+200F/U+202B/U+202C) به libass نمی‌دهیم؛
+        // libass خودش bidi را از روی محتوا انجام می‌دهد و کنترل اضافه باعث به‌هم‌ریختگی می‌شود.
+        return line
     }
 
     private fun moveLeadingPunctToEnd(s: String): String {
