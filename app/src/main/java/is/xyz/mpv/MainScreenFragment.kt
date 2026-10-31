@@ -293,7 +293,16 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         binding = FragmentMainScreenBinding.bind(view)
 
-        Utils.handleInsetsAsPadding(binding.root)
+        if (Utils.isTv(requireContext())) {
+            // در تلویزیون نوار وضعیت وجود ندارد؛ پدینگ بالای اینست را حذف می‌کنیم تا فضای خالی از بین برود
+            androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(binding.root) { _, insets ->
+                val i = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+                binding.root.setPadding(i.left, 0, i.right, i.bottom)
+                insets
+            }
+        } else {
+            Utils.handleInsetsAsPadding(binding.root)
+        }
 
         binding.videoList.layoutManager = LinearLayoutManager(requireContext())
         binding.videoList.adapter = BrowserAdapter()

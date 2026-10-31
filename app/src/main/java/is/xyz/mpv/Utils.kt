@@ -521,6 +521,11 @@ internal object Utils {
      * Note that this will modify the view's padding and probably leave ugly empty space at the top
      * (if using an action bar).
      */
+    fun isTv(context: Context): Boolean {
+        val uiModeManager = context.getSystemService(Context.UI_MODE_SERVICE) as? android.app.UiModeManager
+        return uiModeManager?.currentModeType == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION
+    }
+
     fun handleInsetsAsPadding(view: View) {
         data class Padding(val left: Int, val top: Int, val right: Int, val bottom: Int)
         var originalPadding: Padding? = null
