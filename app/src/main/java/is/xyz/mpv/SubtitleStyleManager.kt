@@ -260,18 +260,12 @@ object SubtitleStyleManager {
         val scrollSubStyle = view.findViewById<ScrollView>(R.id.scrollSubStyle)
         val txtSubSize = view.findViewById<TextView>(R.id.txtSubSize)
         val seekSubSize = view.findViewById<SeekBar>(R.id.seekSubSize)
-        val btnSizeMinus = view.findViewById<View>(R.id.btnSizeMinus)
-        val btnSizePlus = view.findViewById<View>(R.id.btnSizePlus)
 
         val txtSubPos = view.findViewById<TextView>(R.id.txtSubPos)
         val seekSubPos = view.findViewById<SeekBar>(R.id.seekSubPos)
-        val btnPosMinus = view.findViewById<View>(R.id.btnPosMinus)
-        val btnPosPlus = view.findViewById<View>(R.id.btnPosPlus)
 
         val txtSubBorder = view.findViewById<TextView>(R.id.txtSubBorder)
         val seekSubBorder = view.findViewById<SeekBar>(R.id.seekSubBorder)
-        val btnBorderMinus = view.findViewById<View>(R.id.btnBorderMinus)
-        val btnBorderPlus = view.findViewById<View>(R.id.btnBorderPlus)
 
         val colorChipsContainer = view.findViewById<LinearLayout>(R.id.colorChipsContainer)
         val bgChipsContainer = view.findViewById<LinearLayout>(R.id.bgChipsContainer)
@@ -481,14 +475,6 @@ object SubtitleStyleManager {
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) { commitNow() }
         })
-        btnSizeMinus.setOnClickListener {
-            currentSize = (currentSize - 2).coerceIn(20, 100)
-            syncControls(); updateLabels(); commitNow()
-        }
-        btnSizePlus.setOnClickListener {
-            currentSize = (currentSize + 2).coerceIn(20, 100)
-            syncControls(); updateLabels(); commitNow()
-        }
 
         seekSubPos.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
@@ -500,14 +486,6 @@ object SubtitleStyleManager {
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) { commitNow() }
         })
-        btnPosMinus.setOnClickListener {
-            currentPos = (currentPos - 2).coerceIn(0, 100)
-            syncControls(); updateLabels(); commitNow()
-        }
-        btnPosPlus.setOnClickListener {
-            currentPos = (currentPos + 2).coerceIn(0, 100)
-            syncControls(); updateLabels(); commitNow()
-        }
 
         seekSubBorder.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
@@ -519,14 +497,6 @@ object SubtitleStyleManager {
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) { commitNow() }
         })
-        btnBorderMinus.setOnClickListener {
-            currentBorder = ((currentBorder * 10).toInt() - 5).coerceIn(0, 60) / 10.0
-            syncControls(); updateLabels(); commitNow()
-        }
-        btnBorderPlus.setOnClickListener {
-            currentBorder = ((currentBorder * 10).toInt() + 5).coerceIn(0, 60) / 10.0
-            syncControls(); updateLabels(); commitNow()
-        }
 
         switchSubBold.setOnCheckedChangeListener { _, isChecked ->
             if (updatingUiProgrammatically || isChecked == currentBold) return@setOnCheckedChangeListener

@@ -1711,6 +1711,7 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         /******/
         val hiddenButtons = mutableSetOf<Int>()
         val buttons: MutableList<MenuItem> = mutableListOf(
+                MenuItem(R.id.subSeekBtn) { true }, // label button, gets blue focus
                 MenuItem(R.id.subSeekPrev) {
                     MPVLib.command(arrayOf("sub-seek", "-1")); true
                 },

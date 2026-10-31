@@ -5,14 +5,14 @@
         <shape android:shape="rectangle">
             <solid android:color="#2E00B0FF" />
             <corners android:radius="8dp" />
-            <stroke android:width="2.5dp" android:color="#00E5FF" />
+            <stroke android:width="2dp" android:color="#00E5FF" />
         </shape>
     </item>
     <item android:state_selected="true">
         <shape android:shape="rectangle">
             <solid android:color="#2E00B0FF" />
             <corners android:radius="8dp" />
-            <stroke android:width="2.5dp" android:color="#00E5FF" />
+            <stroke android:width="2dp" android:color="#00E5FF" />
         </shape>
     </item>
     <!-- حالت فشردن دکمه OK کنترل یا لمس -->
@@ -20,7 +20,7 @@
         <shape android:shape="rectangle">
             <solid android:color="#4D00B0FF" />
             <corners android:radius="8dp" />
-            <stroke android:width="2.5dp" android:color="#00B0FF" />
+            <stroke android:width="2dp" android:color="#00B0FF" />
         </shape>
     </item>
     <!-- حالت عادی -->
