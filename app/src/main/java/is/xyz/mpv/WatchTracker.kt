@@ -69,7 +69,7 @@ object WatchTracker {
     }
 
     @Synchronized
-    private fun persist(context: Context) {
+    private fun persist(context: Context, sync: Boolean = false) {
         try {
             val root = JSONObject()
             cachedLastId?.let { root.put("last", it) }
@@ -86,11 +86,12 @@ object WatchTracker {
                 o.put("watched", st.watched)
                 root.put("v$id", o)
             }
-            context.applicationContext
+            val editor = context.applicationContext
                 .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit()
                 .putString(KEY_DATA, root.toString())
-                .apply()
+            // برای clearPosition از commit همگام استفاده می‌شود تا اگر پروسس سریع کیل شد، داده از دست نرود
+            if (sync) editor.commit() else editor.apply()
         } catch (e: Exception) {
             Log.w(TAG, "persist failed", e)
         }
@@ -174,7 +175,7 @@ object WatchTracker {
         )
         cachedLastId = videoId
         newIdsSet.remove(videoId)
-        persist(context)
+        persist(context, sync = true)
     }
 
     /**

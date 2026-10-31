@@ -1342,11 +1342,11 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         val restore = pauseForDialog()
 
         val items = mutableListOf(
-            Pair("HW (mediacodec-copy)", "mediacodec-copy"),
+            Pair("HW+ (mediacodec-copy)", "mediacodec-copy"),
             Pair("SW", "no")
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-            items.add(0, Pair("HW+ (mediacodec)", "mediacodec"))
+            items.add(0, Pair("HW (mediacodec)", "mediacodec"))
         val hwdecActive = player.hwdecActive
         val selectedIndex = items.indexOfFirst { it.second == hwdecActive }
         with (AlertDialog.Builder(this)) {
@@ -1845,12 +1845,19 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         }
     }
 
-    private fun updateDecoderButton() {
-        binding.cycleDecoderBtn.text = when (player.hwdecActive) {
-            "mediacodec" -> "HW+"
-            "no" -> "SW"
-            else -> "HW"
+    private fun updateDecoderButton(hwdecValue: String? = null) {
+        val current = hwdecValue ?: try {
+            MPVLib.getPropertyString("hwdec")
+        } catch (_: Exception) {
+            null
+        } ?: MPVView.HWDEC_HW
+
+        val label = when (current) {
+            MPVView.HWDEC_HW, "yes", "auto" -> "HW"
+            MPVView.HWDEC_HWPLUS -> "HW+"
+            else -> "SW"
         }
+        binding.cycleDecoderBtn.text = label
     }
 
     private fun updateSpeedButton() {
@@ -2252,12 +2259,24 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         try {
             // فقط فایل‌های دارای ویدیو
             if (MPVLib.getPropertyString("video-format").isNullOrEmpty()) return
-            if (MPVLib.getPropertyBoolean("paused") == true) { scheduleHwdecWatchdog(); return }
+            if (MPVLib.getPropertyBoolean("paused") == true ||
+                MPVLib.getPropertyBoolean("paused-for-cache") == true) {
+                scheduleHwdecWatchdog()
+                return
+            }
             if (MPVLib.getPropertyBoolean("eof-reached") == true) return
-            if (MPVLib.getPropertyBoolean("paused-for-cache") == true) { scheduleHwdecWatchdog(); return }
+
+            // اگر همین الان فریم‌های ویدیو با موفقیت در حال رندر هستند، نیازی به تغییر دیکدر نیست
             val t1 = MPVLib.getPropertyDouble("time-pos") ?: return
             eventUiHandler.postDelayed({
                 if (isFinishing || isDestroyed) return@postDelayed
+                // بررسی مجدد مکث در پایان بازه ۱.۵ ثانیه‌ای (جلوگیری از سوییچ اشتباه به HW+ هنگام استپ)
+                if (MPVLib.getPropertyBoolean("paused") == true ||
+                    MPVLib.getPropertyBoolean("paused-for-cache") == true ||
+                    MPVLib.getPropertyBoolean("eof-reached") == true) {
+                    scheduleHwdecWatchdog()
+                    return@postDelayed
+                }
                 val t2 = MPVLib.getPropertyDouble("time-pos") ?: return@postDelayed
                 if (t2 < t1) { scheduleHwdecWatchdog(); return@postDelayed } // سیک به عقب
                 if (t2 - t1 < 0.5 && advanceHwdecStage()) {
@@ -2381,6 +2400,16 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         }
 
         if (eventId == MpvEvent.MPV_EVENT_START_FILE) {
+            // بازگرداندن دیکدر به حالت پیش‌فرض HW در شروع هر فایل
+            // (تا تنظیم قبلی یا واچ‌داگ آن را روی HW+ نگه ندارد)
+            val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(this)
+            val defaultHwdec = if (prefs.getBoolean("hardware_decoding", true))
+                MPVView.HWDEC_HW
+            else
+                MPVView.HWDEC_SW
+            MPVLib.setPropertyString("hwdec", defaultHwdec)
+            updateDecoderButton(defaultHwdec)
+
             val cmds = onloadCommands.toTypedArray()
             onloadCommands.clear()
             for (c in cmds)
