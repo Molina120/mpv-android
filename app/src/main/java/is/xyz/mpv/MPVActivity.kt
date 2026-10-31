@@ -1911,19 +1911,13 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         }
     }
 
-    private fun updateDecoderButton(hwdecValue: String? = null) {
-        val current = hwdecValue ?: try {
-            MPVLib.getPropertyString("hwdec")
-        } catch (_: Exception) {
-            null
-        } ?: MPVView.HWDEC_HW
-
-        val label = when (current) {
-            MPVView.HWDEC_HW, "yes", "auto" -> "HW"
-            MPVView.HWDEC_HWPLUS -> "HW+"
-            else -> "SW"
+    private fun updateDecoderButton() {
+        binding.cycleDecoderBtn.text = when (player.hwdecActive) {
+            "mediacodec" -> "HW"
+            "mediacodec-copy" -> "HW+"
+            "no" -> "SW"
+            else -> "HW"
         }
-        binding.cycleDecoderBtn.text = label
     }
 
     private fun updateSpeedButton() {
@@ -2309,67 +2303,6 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
      * از آن به بعد بندانگشتی در مرورگر نمایش داده می‌شود.
      */
     private var thumbCaptureToken = 0
-    /**
-     * ناظر خودکار دیکدر: پیش‌فرض HW است؛ اگر چند ثانیه پس از لود، ویدیو جلو نرفت
-     * (دیکدر HW گیر کرده)، خودکار یک پله جلو می‌رود: HW ← HW+ ← SW
-     */
-    private val hwdecWatchdogTask = Runnable { checkHwdecProgress() }
-
-    private fun scheduleHwdecWatchdog() {
-        eventUiHandler.removeCallbacks(hwdecWatchdogTask)
-        eventUiHandler.postDelayed(hwdecWatchdogTask, 6000)
-    }
-
-    private fun checkHwdecProgress() {
-        if (isFinishing || isDestroyed) return
-        try {
-            // فقط فایل‌های دارای ویدیو
-            if (MPVLib.getPropertyString("video-format").isNullOrEmpty()) return
-            if (MPVLib.getPropertyBoolean("paused") == true ||
-                MPVLib.getPropertyBoolean("paused-for-cache") == true) {
-                scheduleHwdecWatchdog()
-                return
-            }
-            if (MPVLib.getPropertyBoolean("eof-reached") == true) return
-
-            // اگر همین الان فریم‌های ویدیو با موفقیت در حال رندر هستند، نیازی به تغییر دیکدر نیست
-            val t1 = MPVLib.getPropertyDouble("time-pos") ?: return
-            eventUiHandler.postDelayed({
-                if (isFinishing || isDestroyed) return@postDelayed
-                // بررسی مجدد مکث در پایان بازه ۱.۵ ثانیه‌ای (جلوگیری از سوییچ اشتباه به HW+ هنگام استپ)
-                if (MPVLib.getPropertyBoolean("paused") == true ||
-                    MPVLib.getPropertyBoolean("paused-for-cache") == true ||
-                    MPVLib.getPropertyBoolean("eof-reached") == true) {
-                    scheduleHwdecWatchdog()
-                    return@postDelayed
-                }
-                val t2 = MPVLib.getPropertyDouble("time-pos") ?: return@postDelayed
-                if (t2 < t1) { scheduleHwdecWatchdog(); return@postDelayed } // سیک به عقب
-                if (t2 - t1 < 0.5 && advanceHwdecStage()) {
-                    // یک فرصت دیگر به مرحله بعدی زنجیره بده
-                    eventUiHandler.postDelayed(hwdecWatchdogTask, 8000)
-                }
-            }, 1500)
-        } catch (e: Exception) {
-            Log.w("MPVActivity", "hwdec watchdog failed", e)
-        }
-    }
-
-    /** رفتن به مرحله بعدی زنجیره دیکدر؛ اگر به آخر رسیده‌ایم false */
-    private fun advanceHwdecStage(): Boolean {
-        val chain = MPVView.HWDEC_CHAIN
-        val current = try { MPVLib.getPropertyString("hwdec") } catch (_: Exception) { null }
-            ?: return false
-        val idx = chain.indexOf(current)
-        if (idx < 0 || idx >= chain.size - 1) return false
-        val next = chain[idx + 1]
-        Log.w("MPVActivity", "Playback stalled with hwdec=$current, auto-switching to $next")
-        MpvBg.post {
-            try { MPVLib.setPropertyString("hwdec", next) }
-            catch (e: Exception) { Log.w("MPVActivity", "hwdec switch failed", e) }
-        }
-        return true
-    }
 
     private fun scheduleThumbCapture() {
         val vid = intentVideoId ?: return
@@ -2480,7 +2413,6 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
                 }
             }
             scheduleThumbCapture()
-            scheduleHwdecWatchdog()
             // ثبت شروع پخش: برچسب New برداشته و به‌عنوان آخرین پخش علامت‌گذاری می‌شود
             // (مقادیر lastKnown ریست می‌شوند تا ویدیوی قبلی در حافظه نماند)
             lastKnownPosMs = 0L
@@ -2493,16 +2425,6 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             // ریست وضعیت برای فایل جدید (قبل از هر کاری)
             playbackReachedEof = false
             playbackHasStarted = false
-
-            // بازگرداندن دیکدر به حالت پیش‌فرض HW در شروع هر فایل
-            // (تا تنظیم قبلی یا واچ‌داگ آن را روی HW+ نگه ندارد)
-            val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(this)
-            val defaultHwdec = if (prefs.getBoolean("hardware_decoding", true))
-                MPVView.HWDEC_HW
-            else
-                MPVView.HWDEC_SW
-            MPVLib.setPropertyString("hwdec", defaultHwdec)
-            updateDecoderButton(defaultHwdec)
 
             val cmds = onloadCommands.toTypedArray()
             onloadCommands.clear()
