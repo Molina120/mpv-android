@@ -7,41 +7,99 @@ import android.net.Uri
 import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
 
 /**
- * وضعیت تماشای ویدیوها به سبک MX Player:
- * - ذخیره موقعیت پخش هر ویدیو برای «ادامه پخش»
- * - علامت‌گذاری ویدیوی تمام‌شده (خاکستری) و آخرین ویدیوی پخش‌شده (آبی)
- * - تشخیص ویدیوهای جدید نسبت به اسکن قبلی (بج New)
+ * مدیریت بهینه وضعیت تماشای ویدیوها (کش در رم + ذخیره‌سازی غیرمسدودکننده):
+ * - در حال پخش (آبی): آخرین ویدیوی پخش‌شده که هنوز به پایان نرسیده است
+ * - تمام‌شده (خاکستری و کمرنگ): ویدیویی که به پایان رسیده است (با پخش مجدد به حالت در حال پخش برمی‌گردد)
+ * - جدید (New): ویدیوهای تازه اضافه‌شده تا زمانی که برای اولین بار پخش شوند
  */
 object WatchTracker {
     private const val TAG = "WatchTracker"
     private const val PREFS = "watch_tracker_v1"
     private const val KEY_DATA = "data"
+    private const val FINISH_THRESHOLD = 0.92 // ۹۲٪ زمان ویدیو (پوشش تیتراژ پایانی)
 
     data class State(val positionMs: Long, val durationMs: Long, val watched: Boolean)
 
-    private fun load(context: Context): JSONObject {
-        return try {
-            val s = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .getString(KEY_DATA, null)
-            if (s.isNullOrEmpty()) JSONObject() else JSONObject(s)
-        } catch (e: Exception) {
-            JSONObject()
-        }
-    }
+    @Volatile private var initialized = false
+    private val statesMap = ConcurrentHashMap<Long, State>()
+    private val knownIdsSet = ConcurrentHashMap.newKeySet<Long>()
+    private val newIdsSet = ConcurrentHashMap.newKeySet<Long>()
+    @Volatile private var cachedLastId: Long? = null
 
-    private fun save(context: Context, root: JSONObject) {
+    @Synchronized
+    private fun ensureLoaded(context: Context) {
+        if (initialized) return
+        initialized = true
         try {
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                .putString(KEY_DATA, root.toString()).apply()
+            val s = context.applicationContext
+                .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(KEY_DATA, null)
+            if (s.isNullOrEmpty()) return
+            val root = JSONObject(s)
+
+            val last = root.optLong("last", -1L)
+            cachedLastId = if (last >= 0L) last else null
+
+            root.optJSONArray("known")?.let { arr ->
+                for (i in 0 until arr.length()) knownIdsSet.add(arr.optLong(i))
+            }
+            root.optJSONArray("new_ids")?.let { arr ->
+                for (i in 0 until arr.length()) newIdsSet.add(arr.optLong(i))
+            }
+
+            val keys = root.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
+                if (k.startsWith("v")) {
+                    val id = k.substring(1).toLongOrNull() ?: continue
+                    val o = root.optJSONObject(k) ?: continue
+                    statesMap[id] = State(
+                        positionMs = o.optLong("pos", 0L),
+                        durationMs = o.optLong("dur", 0L),
+                        watched = o.optBoolean("watched", false)
+                    )
+                }
+            }
         } catch (e: Exception) {
-            Log.w(TAG, "save failed", e)
+            Log.w(TAG, "load failed", e)
         }
     }
 
-    /** شناسه ویدیوی MediaStore از روی اینتنت (فقط content://media/.../video/<id>) */
+    @Synchronized
+    private fun persist(context: Context) {
+        try {
+            val root = JSONObject()
+            cachedLastId?.let { root.put("last", it) }
+            if (knownIdsSet.isNotEmpty()) {
+                root.put("known", JSONArray(knownIdsSet.toList()))
+            }
+            if (newIdsSet.isNotEmpty()) {
+                root.put("new_ids", JSONArray(newIdsSet.toList()))
+            }
+            for ((id, st) in statesMap) {
+                val o = JSONObject()
+                o.put("pos", st.positionMs)
+                o.put("dur", st.durationMs)
+                o.put("watched", st.watched)
+                root.put("v$id", o)
+            }
+            context.applicationContext
+                .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_DATA, root.toString())
+                .apply()
+        } catch (e: Exception) {
+            Log.w(TAG, "persist failed", e)
+        }
+    }
+
+    /** استخراج شناسه ویدیو از اینتنت (پشتیبانی از extra مستقیم یا URI استاندارد MediaStore) */
     fun videoIdFromIntent(intent: Intent): Long? {
+        val explicitId = intent.getLongExtra("video_id", -1L)
+        if (explicitId >= 0L) return explicitId
         return try {
             val data: Uri = intent.data ?: return null
             if (data.scheme != "content" || data.authority != "media") return null
@@ -53,66 +111,98 @@ object WatchTracker {
     }
 
     fun state(context: Context, videoId: Long): State? {
-        val o = load(context).optJSONObject("v$videoId") ?: return null
-        return State(o.optLong("pos"), o.optLong("dur"), o.optBoolean("watched"))
+        ensureLoaded(context)
+        return statesMap[videoId]
     }
 
     fun lastPlayedId(context: Context): Long? {
-        val id = load(context).optLong("last", -1L)
-        return if (id < 0) null else id
+        ensureLoaded(context)
+        return cachedLastId
     }
 
-    /** ذخیره وضعیت هنگام توقف/خروج از پخش */
-    fun onPlaybackStopped(
-        context: Context, videoId: Long,
-        posMs: Long, durMs: Long, eofReached: Boolean
-    ) {
-        try {
-            val root = load(context)
-            val wasWatched = root.optJSONObject("v$videoId")?.optBoolean("watched") == true
-            val finished = eofReached || (durMs > 0 && posMs >= durMs * 0.95)
-            val obj = JSONObject()
-            obj.put("pos", if (finished) 0L else posMs)
-            obj.put("dur", durMs)
-            obj.put("watched", finished || wasWatched)
-            root.put("v$videoId", obj)
-            root.put("last", videoId)
-            save(context, root)
-        } catch (e: Exception) {
-            Log.w(TAG, "onPlaybackStopped failed", e)
-        }
+    fun getNewIds(context: Context): Set<Long> {
+        ensureLoaded(context)
+        return newIdsSet.toSet()
     }
 
-    fun clearPosition(context: Context, videoId: Long) {
-        try {
-            val root = load(context)
-            root.optJSONObject("v$videoId")?.put("pos", 0L)
-            save(context, root)
-        } catch (e: Exception) {
-        }
+    /** به محض شروع پخش یک ویدیو، برچسب New از روی آن برداشته می‌شود و به عنوان آخرین پخش ثبت می‌گردد */
+    fun onPlaybackStarted(context: Context, videoId: Long) {
+        ensureLoaded(context)
+        cachedLastId = videoId
+        newIdsSet.remove(videoId)
+        persist(context)
     }
 
     /**
-     * ویدیوهای جدید نسبت به اسکن قبلی را برمی‌گرداند.
-     * در اولین اسکن همه ویدیوها «شناخته‌شده» حساب می‌شوند (بج New نمی‌گیرند).
+     * ذخیره وضعیت هنگام توقف یا اتمام پخش:
+     * - اگر ویدیو به انتها رسیده باشد (eofReached یا عبور از ۹۲٪ مدت): watched = true و pos = 0L
+     * - اگر ویدیو قبلاً تمام شده بوده ولی الان مجدداً از اول یا وسط در حال پخش است: watched = false می‌شود تا دوباره آبی شود
+     */
+    fun onPlaybackStopped(
+        context: Context,
+        videoId: Long,
+        posMs: Long,
+        durMs: Long,
+        eofReached: Boolean
+    ) {
+        ensureLoaded(context)
+        val prev = statesMap[videoId]
+        val effectiveDur = if (durMs > 0L) durMs else (prev?.durationMs ?: 0L)
+        val finished = eofReached || (effectiveDur > 0L && posMs >= (effectiveDur * FINISH_THRESHOLD).toLong())
+
+        val newState = if (finished) {
+            State(positionMs = 0L, durationMs = effectiveDur, watched = true)
+        } else {
+            // در صورت پخش مجدد یک ویدیوی تمام‌شده، وضعیت آن از خاکستری (watched=true) به در حال پخش (watched=false) تغییر می‌کند
+            State(positionMs = posMs.coerceAtLeast(0L), durationMs = effectiveDur, watched = false)
+        }
+
+        statesMap[videoId] = newState
+        cachedLastId = videoId
+        newIdsSet.remove(videoId)
+        persist(context)
+    }
+
+    /** ریست کردن موقعیت هنگام انتخاب گزینه «پخش از ابتدا» (تغییر وضعیت از تمام‌شده به در حال پخش) */
+    fun clearPosition(context: Context, videoId: Long) {
+        ensureLoaded(context)
+        val prev = statesMap[videoId]
+        statesMap[videoId] = State(
+            positionMs = 0L,
+            durationMs = prev?.durationMs ?: 0L,
+            watched = false
+        )
+        cachedLastId = videoId
+        newIdsSet.remove(videoId)
+        persist(context)
+    }
+
+    /**
+     * تشخیص ویدیوهای جدید نسبت به اسکن قبلی و حفظ برچسب New تا زمانی که ویدیو پخش شود.
      */
     fun updateKnownIds(context: Context, currentIds: Set<Long>): Set<Long> {
         if (currentIds.isEmpty()) return emptySet()
+        ensureLoaded(context)
         return try {
-            val root = load(context)
-            val knownArr = root.optJSONArray("known")
-            if (knownArr == null) {
-                root.put("known", JSONArray(currentIds.toList()))
-                save(context, root)
+            if (knownIdsSet.isEmpty()) {
+                // اولین اجرای برنامه: همه ویدیوهای موجود شناخته‌شده تلقی می‌شوند
+                knownIdsSet.addAll(currentIds)
+                persist(context)
                 emptySet()
             } else {
-                val known = mutableSetOf<Long>()
-                for (i in 0 until knownArr.length()) known.add(knownArr.optLong(i))
-                val newIds = currentIds - known
-                // لیست شناخته‌شده‌ها را با وضعیت فعلی همگام می‌کنیم (حذف‌شده‌ها پاک می‌شوند)
-                root.put("known", JSONArray(currentIds.toList()))
-                save(context, root)
-                newIds
+                val added = currentIds - knownIdsSet
+                // فقط ویدیوهایی که واقعاً تازه اضافه شده‌اند و هنوز پخش نشده‌اند برچسب New می‌گیرند
+                for (id in added) {
+                    if (!statesMap.containsKey(id)) {
+                        newIdsSet.add(id)
+                    }
+                }
+                // حذف شناسه‌هایی که فایلشان از دستگاه پاک شده است
+                newIdsSet.retainAll(currentIds)
+                knownIdsSet.clear()
+                knownIdsSet.addAll(currentIds)
+                persist(context)
+                newIdsSet.toSet()
             }
         } catch (e: Exception) {
             emptySet()

@@ -382,6 +382,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         if (!isAdded) return
         val ctx = requireContext()
         lastPlayedId = WatchTracker.lastPlayedId(ctx)
+        newVideoIds = WatchTracker.getNewIds(ctx)
         updateFab()
         (binding.videoList.adapter as? BrowserAdapter)?.notifyDataSetChanged()
     }
@@ -440,15 +441,28 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             private val size: TextView = v.findViewById(R.id.folderSize)
             private val badgeNew: TextView = v.findViewById(R.id.folderBadgeNew)
             fun bind(folder: VideoScanner.Folder) {
+                val ctx = itemView.context
                 name.text = folder.name
                 count.text = resources.getQuantityString(
                     R.plurals.browser_videos_count, folder.videos.size, folder.videos.size)
-                size.text = VideoScanner.formatSize(itemView.context, folder.totalSize)
-                val isLast = lastPlayedId != null &&
-                        folder.videos.any { it.id == lastPlayedId }
+                size.text = VideoScanner.formatSize(ctx, folder.totalSize)
+
+                val lastVid = if (lastPlayedId != null) {
+                    folder.videos.find { it.id == lastPlayedId }
+                } else null
+                val isLastInProgress = lastVid != null &&
+                        WatchTracker.state(ctx, lastVid.id)?.watched != true
+                val allWatched = folder.videos.isNotEmpty() &&
+                        folder.videos.all { WatchTracker.state(ctx, it.id)?.watched == true }
+
                 name.setTextColor(
-                    ContextCompat.getColor(itemView.context,
-                        if (isLast) R.color.watch_last else android.R.color.white))
+                    ContextCompat.getColor(ctx, when {
+                        isLastInProgress -> R.color.watch_last
+                        allWatched -> R.color.watch_done
+                        else -> android.R.color.white
+                    })
+                )
+                name.alpha = if (allWatched && !isLastInProgress) 0.65f else 1.0f
                 badgeNew.isVisible = folder.videos.any { it.id in newVideoIds }
                 itemView.setOnClickListener { showVideos(folder) }
             }
@@ -464,23 +478,32 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             private val badgeSize: TextView = v.findViewById(R.id.badgeSize)
             private val badgeDate: TextView = v.findViewById(R.id.badgeDate)
             fun bind(video: VideoScanner.Video) {
+                val ctx = itemView.context
                 name.text = video.name
                 thumbDuration.text = VideoScanner.formatDuration(video.durationMs)
                 badgeSub.isVisible = video.hasSubtitle
                 badgeDub.isVisible = video.hasDubbedAudio
                 badgeNew.isVisible = video.id in newVideoIds
-                badgeSize.text = VideoScanner.formatSize(itemView.context, video.sizeBytes)
+                badgeSize.text = VideoScanner.formatSize(ctx, video.sizeBytes)
                 val dateStr = VideoScanner.formatDate(video.dateModifiedSec)
                 badgeDate.isVisible = dateStr.isNotEmpty()
                 badgeDate.text = dateStr
-                val ctx = itemView.context
-                val watched = WatchTracker.state(ctx, video.id)?.watched == true
+
+                val st = WatchTracker.state(ctx, video.id)
+                val watched = st?.watched == true
+                val isPlayingOrLast = video.id == lastPlayedId && !watched
+
                 name.setTextColor(
                     ContextCompat.getColor(ctx, when {
+                        isPlayingOrLast -> R.color.watch_last
                         watched -> R.color.watch_done
-                        video.id == lastPlayedId -> R.color.watch_last
                         else -> android.R.color.white
-                    }))
+                    })
+                )
+                // کمرنگ شدن محسوس آیتم‌های تمام‌شده و بازگشت به شفافیت کامل در صورت پخش مجدد
+                name.alpha = if (watched) 0.6f else 1.0f
+                thumb.alpha = if (watched) 0.55f else 1.0f
+
                 loadThumb(video, thumb)
                 itemView.setOnClickListener { onVideoTap(video) }
             }
@@ -1421,8 +1444,9 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
     private fun onVideoTap(video: VideoScanner.Video) {
         val ctx = requireContext()
         val st = WatchTracker.state(ctx, video.id)
-        val canResume = st != null && !st.watched && st.positionMs > 10_000 &&
-                (st.durationMs <= 0 || st.positionMs < st.durationMs * 0.95)
+        val canResume = st != null && !st.watched && st.positionMs > 5_000L &&
+                (st.durationMs <= 0L || st.positionMs < (st.durationMs * 0.92).toLong())
+
         if (canResume) {
             AlertDialog.Builder(ctx)
                 .setTitle(R.string.resume_title)
@@ -1430,32 +1454,41 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                     R.string.resume_message,
                     VideoScanner.formatDuration(st!!.positionMs)))
                 .setPositiveButton(R.string.resume_continue) { d, _ ->
-                    playFile(video.uri.toString(), st.positionMs, video.name)
+                    playFile(video.uri.toString(), st.positionMs, video.name, video.id, video.durationMs)
                     d.dismiss()
                 }
                 .setNegativeButton(R.string.resume_from_start) { d, _ ->
                     WatchTracker.clearPosition(ctx, video.id)
-                    playFile(video.uri.toString(), 0L, video.name)
+                    playFile(video.uri.toString(), 0L, video.name, video.id, video.durationMs)
                     d.dismiss()
                 }
                 .show()
         } else {
-            playFile(video.uri.toString(), 0L, video.name)
+            // اگر ویدیو قبلاً تمام شده بود (watched=true) و کاربر دوباره روی آن زد، وضعیتش به «در حال پخش» تغییر می‌کند
+            if (st?.watched == true) {
+                WatchTracker.clearPosition(ctx, video.id)
+            }
+            playFile(video.uri.toString(), 0L, video.name, video.id, video.durationMs)
         }
     }
 
-    private fun playFile(filepath: String, resumeMs: Long = 0L, displayName: String? = null) {
-        val i: Intent
-        if (filepath.startsWith("content://")) {
-            i = Intent(Intent.ACTION_VIEW, Uri.parse(filepath))
+    private fun playFile(
+        filepath: String,
+        resumeMs: Long = 0L,
+        displayName: String? = null,
+        videoId: Long = -1L,
+        durationMs: Long = 0L
+    ) {
+        val i: Intent = if (filepath.startsWith("content://")) {
+            Intent(Intent.ACTION_VIEW, Uri.parse(filepath))
         } else {
-            i = Intent()
-            i.putExtra("filepath", filepath)
+            Intent().apply { putExtra("filepath", filepath) }
         }
         i.setClass(requireContext(), MPVActivity::class.java)
-        if (resumeMs > 0) i.putExtra("resume_position_ms", resumeMs)
-        // اسم نمایشی واقعی فایل (برای content:// ها، آخرین سگمنت URI فقط یک ID عددی است)
+        if (resumeMs > 0L) i.putExtra("resume_position_ms", resumeMs)
         if (!displayName.isNullOrEmpty()) i.putExtra("video_display_name", displayName)
+        if (videoId >= 0L) i.putExtra("video_id", videoId)
+        if (durationMs > 0L) i.putExtra("video_duration_ms", durationMs)
         playerLauncher.launch(i)
     }
 

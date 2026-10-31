@@ -254,6 +254,11 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
     private var playbackHasStarted = false
     private var onloadCommands = mutableListOf<Array<String>>()
 
+    // آخرین موقعیت/مدت معتبر برای ثبت وضعیت تماشا (وقتی mpv در END_FILE مقادیر را صفر می‌کند)
+    private var lastKnownPosMs: Long = 0L
+    private var lastKnownDurMs: Long = 0L
+    private var playbackReachedEof: Boolean = false
+
     // Activity lifetime
 
     override fun onCreate(icicle: Bundle?) {
@@ -419,6 +424,10 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         // موقعیت ادامه پخش را از اینتنت جدید بخوان (مثلاً ۰ برای «از اول»)
         pendingResumeMs = intent.getLongExtra("resume_position_ms", 0L)
         intentVideoId = WatchTracker.videoIdFromIntent(intent)
+        // ریست مقادیر ردیابی وضعیت برای ویدیوی جدید
+        lastKnownPosMs = 0L
+        lastKnownDurMs = 0L
+        playbackReachedEof = false
 
         if (!activityIsForeground && didResumeBackgroundPlayback) {
             if (this.newIntentReplace) {
@@ -2305,14 +2314,38 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
 
     /**
      * ذخیره وضعیت تماشا هنگام توقف/خروج از پخش (برای «ادامه پخش» در مرورگر).
+     * وقتی فایل به انتها می‌رسد (END_FILE)، مقادیر timePos و eof-reached در mpv صفر/پاک
+     * می‌شوند؛ برای همین آخرین موقعیت و مدت معتبر را نگه می‌داریم.
      */
-    private fun saveWatchState() {        val vid = intentVideoId ?: return
+    private fun saveWatchState(forceEof: Boolean = false) {
+        val vid = intentVideoId ?: return
         try {
-            val posMs = ((player.timePos ?: 0.0) * 1000).toLong().coerceAtLeast(0L)
-            val durMs = psc.duration.coerceAtLeast(0L)
-            val eof = MPVLib.getPropertyBoolean("eof-reached") == true
-            if (posMs > 0 || eof)
-                WatchTracker.onPlaybackStopped(applicationContext, vid, posMs, durMs, eof)
+            val currentPosMs = ((player.timePos ?: 0.0) * 1000.0).toLong().coerceAtLeast(0L)
+            if (currentPosMs > 0L) lastKnownPosMs = currentPosMs
+
+            val propDurMs = ((MPVLib.getPropertyDouble("duration") ?: 0.0) * 1000.0).toLong()
+            val intentDurMs = intent.getLongExtra("video_duration_ms", 0L)
+            val currentDurMs = maxOf(psc.duration, propDurMs, intentDurMs, 0L)
+            if (currentDurMs > 0L) lastKnownDurMs = currentDurMs
+
+            val eof = forceEof ||
+                    playbackReachedEof ||
+                    MPVLib.getPropertyBoolean("eof-reached") == true ||
+                    MPVLib.getPropertyBoolean("core-idle") == true &&
+                    lastKnownDurMs > 0L && lastKnownPosMs >= (lastKnownDurMs * 0.92).toLong()
+
+            val finalPosMs = if (currentPosMs > 0L) currentPosMs else lastKnownPosMs
+            val finalDurMs = if (currentDurMs > 0L) currentDurMs else lastKnownDurMs
+
+            if (finalPosMs > 0L || eof || playbackHasStarted) {
+                WatchTracker.onPlaybackStopped(
+                    applicationContext,
+                    vid,
+                    finalPosMs,
+                    finalDurMs,
+                    eof
+                )
+            }
         } catch (e: Exception) {
             Log.w(TAG, "saveWatchState failed", e)
         }
@@ -2322,6 +2355,9 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         if (eventId == MpvEvent.MPV_EVENT_END_FILE) {
             psc.eof()
             updateMediaSession()
+            // ثبت اتمام ویدیو: در این لحظه timePos در mpv صفر می‌شود، پس با forceEof ذخیره می‌کنیم
+            playbackReachedEof = true
+            saveWatchState(forceEof = true)
         }
 
         if (eventId == MpvEvent.MPV_EVENT_SHUTDOWN)
@@ -2336,6 +2372,12 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             applyPendingResume()
             scheduleThumbCapture()
             scheduleHwdecWatchdog()
+            // ثبت شروع پخش: برچسب New برداشته و به‌عنوان آخرین پخش علامت‌گذاری می‌شود
+            // (مقادیر lastKnown ریست می‌شوند تا ویدیوی قبلی در حافظه نماند)
+            lastKnownPosMs = 0L
+            lastKnownDurMs = 0L
+            playbackReachedEof = false
+            intentVideoId?.let { WatchTracker.onPlaybackStarted(applicationContext, it) }
         }
 
         if (eventId == MpvEvent.MPV_EVENT_START_FILE) {
