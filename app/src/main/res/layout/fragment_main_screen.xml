@@ -96,7 +96,7 @@
                 android:layout_height="24dp"
                 android:layout_gravity="center"
                 android:src="@drawable/ic_play_arrow_black_24dp"
-                android:tint="#111111" />
+                android:tint="#FFFFFF" />
         </FrameLayout>
     </FrameLayout>
 </LinearLayout>

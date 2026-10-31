@@ -24,14 +24,17 @@ internal class MPVView(context: Context, attrs: AttributeSet) : BaseMPVView(cont
         MPVLib.setOptionString("profile", "fast")
 
         // vo
-        setVo(if (sharedPreferences.getBoolean("gpu_next", false))
+        // روی تلویزیون: gpu-next پیش‌فرض تا مشکل خط سبز رندر حل شود
+        val defaultGpuNext = Utils.isTv(context)
+        setVo(if (sharedPreferences.getBoolean("gpu_next", defaultGpuNext))
             "gpu-next"
         else
             "gpu")
 
         // hwdec
+        // روی تلویزیون: mediacodec-copy اول تا مشکل کراپ/خط سبز پیش نیاید (مثل MX Player)
         val hwdec = if (sharedPreferences.getBoolean("hardware_decoding", true))
-            HWDECS
+            if (Utils.isTv(context)) "mediacodec-copy,mediacodec" else HWDECS
         else
             "no"
 
