@@ -4,7 +4,7 @@
     android:id="@+id/browserRoot"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#101010"
+    android:background="#000000"
     android:orientation="vertical">
 
     <androidx.appcompat.widget.Toolbar
