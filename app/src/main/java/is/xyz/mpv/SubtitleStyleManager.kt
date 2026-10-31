@@ -32,7 +32,6 @@ object SubtitleStyleManager {
     private const val PREF_SUB_BOLD = "custom_sub_bold"
     private const val PREF_SUB_COLOR = "custom_sub_color"
     private const val PREF_SUB_BG_COLOR = "custom_sub_bg_color"
-    private const val PREF_SUB_ASS_OVERRIDE = "custom_sub_ass_override"
 
     private const val DEFAULT_SIZE = 55
     private const val DEFAULT_POS = 100
@@ -40,7 +39,6 @@ object SubtitleStyleManager {
     private const val DEFAULT_BOLD = false
     private const val DEFAULT_COLOR = "#FFFFFF"
     private const val DEFAULT_BG_COLOR = "transparent"
-    private const val DEFAULT_ASS_OVERRIDE = true
 
     private const val PREVIEW_THROTTLE_MS = 180L
     private const val KEY_STYLE = "sub-style"
@@ -74,7 +72,6 @@ object SubtitleStyleManager {
         val bold: Boolean,
         val color: String,
         val bgId: String,
-        val assOverride: Boolean
     )
 
     @Volatile
@@ -163,8 +160,7 @@ object SubtitleStyleManager {
         border = prefs.getFloat(PREF_SUB_BORDER, DEFAULT_BORDER.toFloat()).toDouble().coerceIn(0.0, 6.0),
         bold = prefs.getBoolean(PREF_SUB_BOLD, DEFAULT_BOLD),
         color = prefs.getString(PREF_SUB_COLOR, DEFAULT_COLOR) ?: DEFAULT_COLOR,
-        bgId = prefs.getString(PREF_SUB_BG_COLOR, DEFAULT_BG_COLOR) ?: DEFAULT_BG_COLOR,
-        assOverride = prefs.getBoolean(PREF_SUB_ASS_OVERRIDE, DEFAULT_ASS_OVERRIDE)
+        bgId = prefs.getString(PREF_SUB_BG_COLOR, DEFAULT_BG_COLOR) ?: DEFAULT_BG_COLOR
     )
 
     private fun saveStyle(prefs: SharedPreferences, s: Style) {
@@ -175,7 +171,6 @@ object SubtitleStyleManager {
             .putBoolean(PREF_SUB_BOLD, s.bold)
             .putString(PREF_SUB_COLOR, s.color)
             .putString(PREF_SUB_BG_COLOR, s.bgId)
-            .putBoolean(PREF_SUB_ASS_OVERRIDE, s.assOverride)
             .apply()
     }
 
@@ -199,7 +194,6 @@ object SubtitleStyleManager {
             bold = s.bold,
             colorHex = s.color,
             bgId = s.bgId,
-            assOverride = s.assOverride,
             refreshNow = false
         )
     }
@@ -238,7 +232,6 @@ object SubtitleStyleManager {
             bold = s.bold,
             colorHex = s.color,
             bgId = s.bgId,
-            assOverride = s.assOverride,
             refreshNow = true
         )
     }
@@ -283,7 +276,6 @@ object SubtitleStyleManager {
         val colorChipsContainer = view.findViewById<LinearLayout>(R.id.colorChipsContainer)
         val bgChipsContainer = view.findViewById<LinearLayout>(R.id.bgChipsContainer)
         val switchSubBold = view.findViewById<CheckBox>(R.id.switchSubBold)
-        val switchAssOverride = view.findViewById<CheckBox>(R.id.switchAssOverride)
 
         // جلوگیری از سرقت لمس اسلایدرها توسط ScrollView
         lockSeekBarTouch(seekSubSize)
@@ -297,13 +289,12 @@ object SubtitleStyleManager {
         var currentBold = saved.bold
         var currentColor = saved.color
         var currentBgId = saved.bgId
-        var currentAssOverride = saved.assOverride
 
         var updatingUiProgrammatically = false
 
         fun snapshot() = Style(
             currentSize, currentPos, currentBorder, currentBold,
-            currentColor, currentBgId, currentAssOverride
+            currentColor, currentBgId
         )
 
         fun updateLabels() {
@@ -445,7 +436,6 @@ object SubtitleStyleManager {
             seekSubPos.progress = currentPos.coerceIn(0, 100)
             seekSubBorder.progress = (currentBorder * 10).toInt().coerceIn(0, 60)
             switchSubBold.isChecked = currentBold
-            switchAssOverride.isChecked = currentAssOverride
             refreshColorChips()
             refreshBgChips()
             updatingUiProgrammatically = false
@@ -519,12 +509,6 @@ object SubtitleStyleManager {
             commitNow()
         }
 
-        switchAssOverride.setOnCheckedChangeListener { _, isChecked ->
-            if (updatingUiProgrammatically || isChecked == currentAssOverride) return@setOnCheckedChangeListener
-            currentAssOverride = isChecked
-            commitNow()
-        }
-
         val alertDialog = AlertDialog.Builder(context)
             .setTitle(R.string.subtitle_style_title)
             .setView(view)
@@ -551,7 +535,6 @@ object SubtitleStyleManager {
             currentBold = DEFAULT_BOLD
             currentColor = DEFAULT_COLOR
             currentBgId = DEFAULT_BG_COLOR
-            currentAssOverride = DEFAULT_ASS_OVERRIDE
             syncControls()
             updateLabels()
             commitNow()

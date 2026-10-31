@@ -199,7 +199,6 @@
     <string name="subtitle_text_color_label">رنگ متن زیرنویس:</string>
     <string name="subtitle_bg_color_label">کادر پس‌زمینه زیرنویس:</string>
     <string name="subtitle_bold">برجسته کردن متن (Bold)</string>
-    <string name="subtitle_ass_override">اعمال اجباری فونت و استایل روی زیرنویس‌های ASS</string>
     <string name="color_white_default">سفید (پیش‌فرض)</string>
     <string name="color_yellow">زرد</string>
     <string name="color_gold">طلایی</string>

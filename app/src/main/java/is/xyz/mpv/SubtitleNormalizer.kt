@@ -36,7 +36,6 @@ object SubtitleNormalizer : MPVLib.EventObserver {
     @Volatile private var styleBold: Boolean = false
     @Volatile private var styleColorHex: String = "#FFFFFF"
     @Volatile private var styleBgId: String = "transparent"
-    @Volatile private var styleAssOverride: Boolean = true
 
     fun updateStyleConfig(
         size: Int,
@@ -45,7 +44,6 @@ object SubtitleNormalizer : MPVLib.EventObserver {
         bold: Boolean,
         colorHex: String,
         bgId: String,
-        assOverride: Boolean,
         refreshNow: Boolean = true
     ) {
         styleFontSize = size.coerceIn(20, 100)
@@ -54,7 +52,6 @@ object SubtitleNormalizer : MPVLib.EventObserver {
         styleBold = bold
         styleColorHex = colorHex
         styleBgId = bgId
-        styleAssOverride = assOverride
 
         if (refreshNow) {
             refreshCurrentSubtitle()
@@ -243,7 +240,7 @@ object SubtitleNormalizer : MPVLib.EventObserver {
         val joinedText = joinLines(normalizedLines, styleBgId)
 
         // محاسبهٔ موقعیت عمودی در رزولوشن 1280x720 بر اساس درصد (0 = بالا، 100 = پایین)
-        val alignAndPos = if (hasExplicitTopTag && !styleAssOverride) {
+        val alignAndPos = if (hasExplicitTopTag) {
             "\\an8\\pos(640,50)"
         } else {
             val yPos = (36 + (styleSubPos / 100.0) * (720 - 72)).toInt().coerceIn(36, 684)

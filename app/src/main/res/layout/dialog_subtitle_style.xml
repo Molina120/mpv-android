@@ -223,14 +223,6 @@
                 android:layout_weight="1"
                 android:text="@string/subtitle_bold"
                 android:textSize="13sp" />
-
-            <CheckBox
-                android:id="@+id/switchAssOverride"
-                android:layout_width="0dp"
-                android:layout_height="42dp"
-                android:layout_weight="1"
-                android:text="@string/subtitle_ass_override"
-                android:textSize="13sp" />
         </LinearLayout>
 
     </LinearLayout>

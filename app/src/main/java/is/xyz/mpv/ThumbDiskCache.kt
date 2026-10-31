@@ -93,8 +93,8 @@ object ThumbDiskCache {
     }
 
     fun isFailed(context: Context, videoId: Long): Boolean {
-        ensureFailedLoaded(context)
-        return failedMemoryCache.contains(videoId)
+        // غیرفعال کردن مسدودسازی دائمی روی دیسک تا ویدیوهای x265 همیشه شانس ساخت تامبنیل داشته باشند
+        return false
     }
 
     fun markFailed(context: Context, videoId: Long) {

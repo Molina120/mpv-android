@@ -221,7 +221,6 @@
     <string name="subtitle_text_color_label">Subtitle text color:</string>
     <string name="subtitle_bg_color_label">Subtitle background box:</string>
     <string name="subtitle_bold">Bold text</string>
-    <string name="subtitle_ass_override">Force font and style on ASS subtitles</string>
     <string name="color_white_default">White (default)</string>
     <string name="color_yellow">Yellow</string>
     <string name="color_gold">Gold</string>
