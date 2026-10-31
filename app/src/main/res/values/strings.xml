@@ -286,11 +286,12 @@
 
     <!-- Resume playback (MX style) -->
     <string name="resume_title">Resume playback?</string>
-    <string name="resume_message">Continue from %1$s?</string>
+    <string name="resume_message">Continue "%1$s" from %2$s?</string>
     <string name="resume_continue">Continue</string>
     <string name="resume_from_start">From start</string>
 
     <!-- Browser search -->
     <string name="search">Search</string>
     <string name="search_hint">Search videos…</string>
+    <string name="last_video">Last video</string>
 </resources>

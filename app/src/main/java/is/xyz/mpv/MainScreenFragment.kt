@@ -349,6 +349,12 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         })
         binding.toolbar.setOnMenuItemClickListener { item ->
             when (item.itemId) {
+                R.id.menu_last_video -> {
+                    val id = lastPlayedId
+                    val target = folders.asSequence().flatMap { it.videos }.find { it.id == id }
+                    if (target != null) onVideoTap(target)
+                    true
+                }
                 R.id.menu_refresh -> {
                     thumbFailed.clear()
                     ThumbDiskCache.clearAllFailed(requireContext().applicationContext)
@@ -418,7 +424,10 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
     private fun updateFab() {
         val id = lastPlayedId
         val target = folders.asSequence().flatMap { it.videos }.find { it.id == id }
-        if (target != null) {
+        val isTv = Utils.isTv(requireContext())
+        // روی تلویزیون: دکمه از منوی تولبار (کنار سرچ) می‌آید، نه FAB شناور
+        binding.toolbar.menu.findItem(R.id.menu_last_video)?.isVisible = isTv && target != null
+        if (target != null && !isTv) {
             binding.lastVideoFab.isVisible = true
             binding.lastVideoFab.setOnClickListener { onVideoTap(target) }
         } else {
@@ -1848,6 +1857,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                 .setTitle(R.string.resume_title)
                 .setMessage(getString(
                     R.string.resume_message,
+                    video.name,
                     VideoScanner.formatDuration(st!!.positionMs)))
                 .setPositiveButton(R.string.resume_continue) { d, _ ->
                     playFile(video.uri.toString(), st.positionMs, video.name, video.id, video.durationMs)
