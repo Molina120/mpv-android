@@ -442,7 +442,7 @@ object SubtitleNormalizer : MPVLib.EventObserver {
         }
 
         // ۳. حل مشکل ترکیب نقطه با گیومه مثل .«من هولوگرام نیستم»
-        if (Regex("^[.!?؟،:;؛]+«").containsMatchIn(line)) {
+        if (Regex("^[.!?؟،:;؛]+[«\"]").containsMatchIn(line)) {
             val pMatch = Regex("^[.!?؟،:;؛]+").find(line)
             if (pMatch != null) {
                 val punct = pMatch.value
@@ -457,27 +457,28 @@ object SubtitleNormalizer : MPVLib.EventObserver {
             line = line.substring(1) + "»"
         }
 
-        // ۴-ب. جابه‌جایی علائم نگارشی چسبیده به داخل گیومه‌ها به انتهای خط
-        // («،متن» یا «متن،» -> «متن»،)
-        if (line.startsWith("«") && line.length > 2) {
+        // ۴-ب. جابه‌جایی علائم نگارشی چسبیده به داخل گیومه‌ها («...» و "...") به انتهای خط
+        if ((line.startsWith("«") || line.startsWith("\"")) && line.length > 2) {
+            val openQuote = line[0]
             var qEnd = 1
             while (qEnd < line.length && line[qEnd] in PUNCT_SET) qEnd++
             if (qEnd > 1) {
                 val innerPunct = line.substring(1, qEnd)
-                val rest = line.substring(qEnd)
-                if (rest.isNotEmpty() && rest.any { it !in PUNCT_SET && it != '«' && it != '»' }) {
-                    line = "«" + rest + innerPunct
+                val rest = line.substring(qEnd).trimEnd()
+                if (rest.isNotEmpty() && rest.any { it !in PUNCT_SET && it != '«' && it != '»' && it != '"' }) {
+                    line = "$openQuote$rest$innerPunct"
                 }
             }
         }
-        if (line.endsWith("»") && line.length > 2) {
+        if ((line.endsWith("»") || line.endsWith("\"")) && line.length > 2) {
+            val closeQuote = line.last()
             var qStart = line.length - 2
             while (qStart >= 0 && line[qStart] in PUNCT_SET) qStart--
             if (qStart < line.length - 2) {
                 val innerPunct = line.substring(qStart + 1, line.length - 1)
                 val rest = line.substring(0, qStart + 1)
-                if (rest.isNotEmpty() && rest.any { it !in PUNCT_SET && it != '«' && it != '»' }) {
-                    line = rest + "»" + innerPunct
+                if (rest.isNotEmpty() && rest.any { it !in PUNCT_SET && it != '«' && it != '»' && it != '"' }) {
+                    line = "$rest$closeQuote$innerPunct"
                 }
             }
         }
@@ -485,14 +486,62 @@ object SubtitleNormalizer : MPVLib.EventObserver {
         // ۵. انتقال سایر علائم نگارشی ابتدایی به انتها
         line = moveLeadingPunctToEnd(line)
 
+        // ۵-ب. اصلاح پرانتزهای بهینه شده برای پلیرهای قدیمی LTR
+        // نمونه: «(از بالای دیوار " قلندیا"( روستایی در فلسطین» -> «از بالای دیوار " قلندیا" (روستایی در فلسطین)»
+        line = fixMalformedParentheses(line)
+
         // ۶. برگرداندن خط تیره دیالوگ به ابتدای صحیح جمله
         if (isDialogue) {
             line = "- $line"
         }
 
-        // v38: کنترل‌های bidi (U+200F/U+202B/U+202C) به libass نمی‌دهیم؛
-        // libass خودش bidi را از روی محتوا انجام می‌دهد و کنترل اضافه باعث به‌هم‌ریختگی می‌شود.
         return line
+    }
+
+    /**
+     * اصلاح پرانتزهایی که در فایل‌های SRT قدیمی برای نمایش در محیط LTR جابه‌جا یا وارونه شده‌اند:
+     * ۱. الگوی `(متن اصلی( متن پرانتز` یا `)متن اصلی) متن پرانتز` -> `متن اصلی (متن پرانتز)`
+     * ۲. الگوی پرانتزهای معکوس یا تکراری در جای درست مثل `متن )پرانتز(` یا `متن (پرانتز(` -> `متن (پرانتز)`
+     */
+    private fun fixMalformedParentheses(s: String): String {
+        if (!s.contains('(') && !s.contains(')')) return s
+
+        // حالت ۱: پرانتز اول در ابتدای خط و پرانتز دوم وسط جمله قرار گرفته است
+        // مانند: (از بالای دیوار " قلندیا"( روستایی در فلسطین
+        val ltrHackedLeading = Regex("^\\(\\s*([^()]+?)\\s*\\(\\s*([^()]+?)([.!?؟،:;؛…]*)$")
+        ltrHackedLeading.matchEntire(s)?.let { m ->
+            val mainText = m.groupValues[1].trim()
+            val parenText = m.groupValues[2].trim()
+            val trailingPunct = m.groupValues[3]
+            return "$mainText ($parenText)$trailingPunct"
+        }
+
+        val ltrHackedLeadingClose = Regex("^\\)\\s*([^()]+?)\\s*[()]\\s*([^()]+?)([.!?؟،:;؛…]*)$")
+        ltrHackedLeadingClose.matchEntire(s)?.let { m ->
+            val mainText = m.groupValues[1].trim()
+            val parenText = m.groupValues[2].trim()
+            val trailingPunct = m.groupValues[3]
+            return "$mainText ($parenText)$trailingPunct"
+        }
+
+        // حالت ۲: جای بخش‌ها درست است اما جهت خود کاراکترهای پرانتز برعکس یا یکسان تایپ شده است
+        // مانند: «متن )توضیح(» یا «متن (توضیح(» یا «)توضیح(»
+        val parenCount = s.count { it == '(' || it == ')' }
+        if (parenCount > 0 && parenCount % 2 == 0) {
+            val sb = StringBuilder(s.length)
+            var openNext = true
+            for (c in s) {
+                if (c == '(' || c == ')') {
+                    sb.append(if (openNext) '(' else ')')
+                    openNext = !openNext
+                } else {
+                    sb.append(c)
+                }
+            }
+            return sb.toString()
+        }
+
+        return s
     }
 
     private fun moveLeadingPunctToEnd(s: String): String {

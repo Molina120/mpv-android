@@ -406,6 +406,8 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
     override fun onNewIntent(intent: Intent?) {
         Log.v(TAG, "onNewIntent($intent)")
         super.onNewIntent(intent)
+        // به‌روزرسانی اینتنت اکتیویتی تا extras جدید (resume_position_ms، video_display_name) خوانده شوند
+        setIntent(intent)
 
         // Happens when mpv is still running (not necessarily playing) and the user selects a new
         // file to be played from another app
@@ -413,6 +415,10 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         if (filepath == null) {
             return
         }
+
+        // موقعیت ادامه پخش را از اینتنت جدید بخوان (مثلاً ۰ برای «از اول»)
+        pendingResumeMs = intent.getLongExtra("resume_position_ms", 0L)
+        intentVideoId = WatchTracker.videoIdFromIntent(intent)
 
         if (!activityIsForeground && didResumeBackgroundPlayback) {
             if (this.newIntentReplace) {
