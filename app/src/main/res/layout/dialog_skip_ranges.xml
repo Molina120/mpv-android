@@ -24,6 +24,7 @@
 
         <androidx.appcompat.widget.SwitchCompat
             android:id="@+id/switchSkipEnabled"
+                android:padding="8dp"
             android:background="@drawable/item_focus_selector"
             android:textColor="#FFFFFF"
             android:layout_width="match_parent"
