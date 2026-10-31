@@ -20,48 +20,56 @@ object SkipRangeManager {
         PLAY_ONLY_SPECIFIED_RANGES
     }
 
-    private const val PREF_SKIP_ENABLED = "skip_enabled"
-    private const val PREF_SKIP_MODE = "skip_mode"
-    private const val PREF_SKIP_RANGES_TEXT = "skip_ranges_text"
+    /**
+     * تنظیمات پرش خودکار هر ویدیو جداگانه ذخیره می‌شود (کلید بر اساس شناسه ویدیو).
+     */
+    data class SkipConfig(
+        var isEnabled: Boolean = false,
+        var mode: SkipMode = SkipMode.SKIP_SPECIFIED_RANGES,
+        var rawInputText: String = "",
+        var ranges: List<TimeRange> = emptyList(),
+        // وضعیت زمان‌بندی پرش (جلوگیری از پرش‌های پیاپی) — مختص هر ویدیو
+        var lastSeekTimestampMs: Long = 0L,
+        var lastSkippedTargetSec: Double = -1.0
+    )
 
-    @Volatile
-    var isEnabled: Boolean = false
-    @Volatile
-    var mode: SkipMode = SkipMode.SKIP_SPECIFIED_RANGES
-    var rawInputText: String = ""
-        private set
-    @Volatile
-    private var ranges: List<TimeRange> = emptyList()
-    private var prefsLoaded = false
+    private const val PREF_SKIP_ENABLED_PREFIX = "skip_enabled_"
+    private const val PREF_SKIP_MODE_PREFIX = "skip_mode_"
+    private const val PREF_SKIP_RANGES_TEXT_PREFIX = "skip_ranges_text_"
 
-    private var lastSeekTimestampMs: Long = 0L
-    private var lastSkippedTargetSec: Double = -1.0
+    private val configCache = mutableMapOf<Long, SkipConfig>()
+    private val cacheLock = Any()
+
     private const val SEEK_COOLDOWN_MS = 950L
 
-    fun loadFromPrefs(context: Context) {
-        if (prefsLoaded) return
-        prefsLoaded = true
-        try {
-            val prefs = PreferenceManager.getDefaultSharedPreferences(context)
-            isEnabled = prefs.getBoolean(PREF_SKIP_ENABLED, false)
-            val modeName = prefs.getString(PREF_SKIP_MODE, SkipMode.SKIP_SPECIFIED_RANGES.name)
-            mode = try {
-                SkipMode.valueOf(modeName ?: SkipMode.SKIP_SPECIFIED_RANGES.name)
-            } catch (e: Exception) {
-                SkipMode.SKIP_SPECIFIED_RANGES
+    fun getConfig(context: Context, videoId: Long): SkipConfig {
+        synchronized(cacheLock) {
+            configCache[videoId]?.let { return it }
+            val cfg = SkipConfig()
+            try {
+                val prefs = PreferenceManager.getDefaultSharedPreferences(context)
+                cfg.isEnabled = prefs.getBoolean(PREF_SKIP_ENABLED_PREFIX + videoId, false)
+                val modeName = prefs.getString(PREF_SKIP_MODE_PREFIX + videoId, SkipMode.SKIP_SPECIFIED_RANGES.name)
+                cfg.mode = try {
+                    SkipMode.valueOf(modeName ?: SkipMode.SKIP_SPECIFIED_RANGES.name)
+                } catch (e: Exception) {
+                    SkipMode.SKIP_SPECIFIED_RANGES
+                }
+                cfg.rawInputText = prefs.getString(PREF_SKIP_RANGES_TEXT_PREFIX + videoId, "") ?: ""
+                cfg.ranges = parseRanges(cfg.rawInputText)
+            } catch (_: Exception) {
             }
-            rawInputText = prefs.getString(PREF_SKIP_RANGES_TEXT, "") ?: ""
-            ranges = parseRanges(rawInputText)
-        } catch (_: Exception) {
+            configCache[videoId] = cfg
+            return cfg
         }
     }
 
-    private fun saveToPrefs(context: Context) {
+    private fun saveConfig(context: Context, videoId: Long, cfg: SkipConfig) {
         try {
             PreferenceManager.getDefaultSharedPreferences(context).edit()
-                .putBoolean(PREF_SKIP_ENABLED, isEnabled)
-                .putString(PREF_SKIP_MODE, mode.name)
-                .putString(PREF_SKIP_RANGES_TEXT, rawInputText)
+                .putBoolean(PREF_SKIP_ENABLED_PREFIX + videoId, cfg.isEnabled)
+                .putString(PREF_SKIP_MODE_PREFIX + videoId, cfg.mode.name)
+                .putString(PREF_SKIP_RANGES_TEXT_PREFIX + videoId, cfg.rawInputText)
                 .apply()
         } catch (_: Exception) {
         }
@@ -132,28 +140,29 @@ object SkipRangeManager {
         }
     }
 
-    fun checkAndSkipIfNeeded(currentPositionSec: Int, onSkipTriggered: (Double) -> Unit) {
-        val activeRanges = ranges
-        if (!isEnabled || activeRanges.isEmpty()) return
+    fun checkAndSkipIfNeeded(context: Context, videoId: Long, currentPositionSec: Int, onSkipTriggered: (Double) -> Unit) {
+        val cfg = getConfig(context, videoId)
+        val activeRanges = cfg.ranges
+        if (!cfg.isEnabled || activeRanges.isEmpty()) return
 
         val now = SystemClock.elapsedRealtime()
-        if (now - lastSeekTimestampMs < SEEK_COOLDOWN_MS) return
+        if (now - cfg.lastSeekTimestampMs < SEEK_COOLDOWN_MS) return
 
         val pos = currentPositionSec.toDouble()
 
         // اگر کاربر به عقب برگشته، قفل هدف قبلی را آزاد کن
-        if (pos < lastSkippedTargetSec - 3.0 || pos > lastSkippedTargetSec + 2.0) {
-            lastSkippedTargetSec = -1.0
+        if (pos < cfg.lastSkippedTargetSec - 3.0 || pos > cfg.lastSkippedTargetSec + 2.0) {
+            cfg.lastSkippedTargetSec = -1.0
         }
 
-        when (mode) {
+        when (cfg.mode) {
             SkipMode.SKIP_SPECIFIED_RANGES -> {
                 val matched = activeRanges.firstOrNull {
                     pos >= it.startSec && pos < (it.endSec - 0.8)
                 }
-                if (matched != null && matched.endSec != lastSkippedTargetSec) {
-                    lastSeekTimestampMs = now
-                    lastSkippedTargetSec = matched.endSec
+                if (matched != null && matched.endSec != cfg.lastSkippedTargetSec) {
+                    cfg.lastSeekTimestampMs = now
+                    cfg.lastSkippedTargetSec = matched.endSec
                     onSkipTriggered(matched.endSec)
                 }
             }
@@ -163,9 +172,9 @@ object SkipRangeManager {
                 }
                 if (!insideAny) {
                     val nextRange = activeRanges.firstOrNull { it.startSec > pos }
-                    if (nextRange != null && nextRange.startSec != lastSkippedTargetSec) {
-                        lastSeekTimestampMs = now
-                        lastSkippedTargetSec = nextRange.startSec
+                    if (nextRange != null && nextRange.startSec != cfg.lastSkippedTargetSec) {
+                        cfg.lastSeekTimestampMs = now
+                        cfg.lastSkippedTargetSec = nextRange.startSec
                         onSkipTriggered(nextRange.startSec)
                     }
                 }
@@ -173,14 +182,16 @@ object SkipRangeManager {
         }
     }
 
-    fun clear() {
-        rawInputText = ""
-        ranges = emptyList()
-        lastSkippedTargetSec = -1.0
+    fun clear(context: Context, videoId: Long) {
+        val cfg = getConfig(context, videoId)
+        cfg.rawInputText = ""
+        cfg.ranges = emptyList()
+        cfg.lastSkippedTargetSec = -1.0
+        saveConfig(context, videoId, cfg)
     }
 
-    fun showSkipDialog(context: Context, onDismiss: () -> Unit) {
-        loadFromPrefs(context)
+    fun showSkipDialog(context: Context, videoId: Long, onDismiss: () -> Unit) {
+        val cfg = getConfig(context, videoId)
 
         val view = LayoutInflater.from(context).inflate(R.layout.dialog_skip_ranges, null)
         val switchSkipEnabled = view.findViewById<SwitchCompat>(R.id.switchSkipEnabled)
@@ -190,9 +201,9 @@ object SkipRangeManager {
         val radioKeepOnly = view.findViewById<RadioButton>(R.id.radioKeepOnly)
         val txtSkipStatus = view.findViewById<TextView>(R.id.txtSkipStatus)
 
-        switchSkipEnabled.isChecked = isEnabled
-        editSkipRanges.setText(rawInputText)
-        if (mode == SkipMode.SKIP_SPECIFIED_RANGES) {
+        switchSkipEnabled.isChecked = cfg.isEnabled
+        editSkipRanges.setText(cfg.rawInputText)
+        if (cfg.mode == SkipMode.SKIP_SPECIFIED_RANGES) {
             radioSkipInside.isChecked = true
         } else {
             radioKeepOnly.isChecked = true
@@ -207,7 +218,7 @@ object SkipRangeManager {
             }
         }
 
-        updateStatusPreview(rawInputText)
+        updateStatusPreview(cfg.rawInputText)
         editSkipRanges.doAfterTextChanged {
             updateStatusPreview(it?.toString() ?: "")
         }
@@ -251,17 +262,17 @@ object SkipRangeManager {
             .setTitle(R.string.skip_title)
             .setView(view)
             .setPositiveButton(R.string.dialog_save) { _, _ ->
-                isEnabled = switchSkipEnabled.isChecked
-                rawInputText = editSkipRanges.text.toString()
-                ranges = parseRanges(rawInputText)
-                mode = if (radioGroupSkipMode.checkedRadioButtonId == R.id.radioSkipInside) {
+                cfg.isEnabled = switchSkipEnabled.isChecked
+                cfg.rawInputText = editSkipRanges.text.toString()
+                cfg.ranges = parseRanges(cfg.rawInputText)
+                cfg.mode = if (radioGroupSkipMode.checkedRadioButtonId == R.id.radioSkipInside) {
                     SkipMode.SKIP_SPECIFIED_RANGES
                 } else {
                     SkipMode.PLAY_ONLY_SPECIFIED_RANGES
                 }
-                lastSeekTimestampMs = 0L
-                lastSkippedTargetSec = -1.0
-                saveToPrefs(context)
+                cfg.lastSeekTimestampMs = 0L
+                cfg.lastSkippedTargetSec = -1.0
+                saveConfig(context, videoId, cfg)
             }
             .setNeutralButton(R.string.skip_clear, null) // پاکسازی درجا بدون پرش یا بستن ناخواسته
             .setNegativeButton(R.string.dialog_cancel, null)
@@ -278,8 +289,7 @@ object SkipRangeManager {
         // عملکرد دکمه پاکسازی درجا بدون بستن اجباری دیالوگ
         alertDialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.setOnClickListener {
             editSkipRanges.setText("")
-            clear()
-            saveToPrefs(context)
+            clear(context, videoId)
             updateStatusPreview("")
             val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
             imm?.hideSoftInputFromWindow(editSkipRanges.windowToken, 0)

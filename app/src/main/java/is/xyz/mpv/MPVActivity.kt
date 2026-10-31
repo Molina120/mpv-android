@@ -1552,7 +1552,12 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
                     false
                 },
                 MenuItem(R.id.skipRangesBtn) {
-                    SkipRangeManager.showSkipDialog(this, restoreState)
+                    val vid = intentVideoId
+                    if (vid != null) {
+                        SkipRangeManager.showSkipDialog(this, vid, restoreState)
+                    } else {
+                        showToast(getString(R.string.skip_no_video))
+                    }
                     false
                 },
                 MenuItem(R.id.playlistBtn) {
@@ -1876,14 +1881,15 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         if (!userIsOperatingSeekbar)
             binding.playbackSeekbar.progress = position * SEEK_BAR_PRECISION
 
-        // بررسی بازه‌های پرش خودکار زمانی
+        // بررسی بازه‌های پرش خودکار زمانی (مختص هر ویدیو)
         if (!userIsOperatingSeekbar) {
-            // اطمینان از لود تنظیمات ذخیره‌شده (فقط بار اول)
-            SkipRangeManager.loadFromPrefs(this)
-            SkipRangeManager.checkAndSkipIfNeeded(position) { targetSec ->
-                // seek روی ترد پس‌زمینه تا ترد UI با فراخوانی مسدودکننده mpv قفل نشود
-                MpvBg.post { player.timePos = targetSec }
-                showSkipNotice(getString(R.string.skip_toast, Utils.prettyTime(targetSec.roundToInt())))
+            val vid = intentVideoId
+            if (vid != null) {
+                SkipRangeManager.checkAndSkipIfNeeded(this, vid, position) { targetSec ->
+                    // seek روی ترد پس‌زمینه تا ترد UI با فراخوانی مسدودکننده mpv قفل نشود
+                    MpvBg.post { player.timePos = targetSec }
+                    showSkipNotice(getString(R.string.skip_toast, Utils.prettyTime(targetSec.roundToInt())))
+                }
             }
         }
 

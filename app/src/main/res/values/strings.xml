@@ -242,6 +242,7 @@
     <string name="skip_mode_inside">Skip from range start to range end (skip ranges)</string>
     <string name="skip_mode_keep">Play only these ranges (skip gaps between)</string>
     <string name="skip_clear">Clear</string>
+    <string name="skip_no_video">No video is playing.</string>
     <string name="skip_no_valid">No valid time ranges entered.</string>
     <string name="skip_valid_count">%1$d valid time ranges detected.</string>
     <string name="skip_toast">Auto-skipped to %1$s</string>

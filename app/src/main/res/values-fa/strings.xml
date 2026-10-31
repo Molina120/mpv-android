@@ -220,6 +220,7 @@
     <string name="skip_mode_inside">پرش از شروع بازه به پایان بازه (رد کردن بازه‌ها)</string>
     <string name="skip_mode_keep">پخش فقط این بازه‌ها (رد کردن فاصله بین بازه‌ها)</string>
     <string name="skip_clear">پاکسازی</string>
+    <string name="skip_no_video">ویدیویی در حال پخش نیست.</string>
     <string name="skip_no_valid">هیچ بازه معتبری وارد نشده است.</string>
     <string name="skip_valid_count">تعداد %1$d بازه زمانی معتبر شناسایی شد.</string>
     <string name="skip_toast">پرش خودکار به %1$s</string>
