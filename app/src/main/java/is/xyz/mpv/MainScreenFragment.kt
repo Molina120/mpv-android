@@ -648,14 +648,8 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             try {
                 pfd = appCtx.contentResolver.openFileDescriptor(video.uri, "r")
                 if (pfd != null) {
-                    val realPath = Utils.findRealPath(pfd.fd)
-                    if (realPath != null) {
-                        r.setDataSource(realPath)
-                        sourceSet = true
-                    } else {
-                        r.setDataSource(pfd.fileDescriptor)
-                        sourceSet = true
-                    }
+                    r.setDataSource(pfd.fileDescriptor)
+                    sourceSet = true
                 }
             } catch (_: Exception) { }
 
@@ -672,20 +666,18 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             val candidatesUs = if (durationMs > 10_000L) {
                 longArrayOf(
                     durationMs * 150L, // 15%
-                    durationMs * 280L, // 28%
-                    durationMs * 80L,  // 8%
+                    durationMs * 300L, // 30%
+                    durationMs * 500L, // 50%
                     0L
                 )
             } else {
-                longArrayOf(durationMs * 300L, 1_000_000L, 0L)
+                longArrayOf(durationMs * 350L, durationMs * 650L, 0L)
             }
 
             var fallbackFrame: Bitmap? = null
             for ((index, timeUs) in candidatesUs.withIndex()) {
                 val frame = extractSingleFrame(r, timeUs)
                 if (frame == null) {
-                    // اگر در همان تلاش اول نال برگشت، یعنی کدک (مثلاً 10-bit HEVC) پشتیبانی نمی‌شود؛
-                    // پس وقت را روی بقیه زمان‌ها تلف نکن و سریع برو سراغ MediaCodec
                     if (index == 0) return extractSingleFrame(r, 0L)
                     continue
                 }
@@ -696,7 +688,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                 if (fallbackFrame == null) fallbackFrame = frame else frame.recycle()
             }
             fallbackFrame
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         } finally {
             try { r.release() } catch (_: Exception) { }
@@ -705,34 +697,31 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
     }
 
     private fun extractSingleFrame(r: MediaMetadataRetriever, timeUs: Long): Bitmap? {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            val params = MediaMetadataRetriever.BitmapParams().apply {
-                preferredConfig = Bitmap.Config.ARGB_8888
-            }
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    r.getScaledFrameAtTime(
-                        timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 640, 640, params
-                    )?.let { return it }
-                }
-            } catch (_: Exception) { }
-
-            try {
-                r.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, params)
-                    ?.let { return it }
-            } catch (_: Exception) { }
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-            try {
-                r.getScaledFrameAtTime(
-                    timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 640, 640
-                )?.let { return it }
-            } catch (_: Exception) { }
-        }
-
         return try {
-            r.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                // بسیار مهم: بدون ARGB_8888، مبدل رنگ اندروید روی ویدیوهای 10-bit x265 نال برمی‌گرداند
+                val params = MediaMetadataRetriever.BitmapParams().apply {
+                    preferredConfig = Bitmap.Config.ARGB_8888
+                }
+                r.getScaledFrameAtTime(
+                    timeUs,
+                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                    THUMB_WIDTH,
+                    THUMB_HEIGHT,
+                    params
+                ) ?: r.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, params)
+            } else {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                    r.getScaledFrameAtTime(
+                        timeUs,
+                        MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                        THUMB_WIDTH,
+                        THUMB_HEIGHT
+                    ) ?: r.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                } else {
+                    r.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                }
+            }
         } catch (_: Exception) {
             null
         }
@@ -743,6 +732,13 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
      * با ارسال فوری BUFFER_FLAG_END_OF_STREAM پس از فریم کلیدی برای دور زدن بافر B-Frame در انکودهای PSA
      * و تبدیل مستقیم فرمت‌های ۱۰ بیتی (P010 / I010) و ۸ بیتی (YUV_420_888) به Bitmap.
      */
+    private val glCallbackThread by lazy {
+        android.os.HandlerThread("ThumbGlCallback").apply { start() }
+    }
+    private val glCallbackHandler by lazy {
+        android.os.Handler(glCallbackThread.looper)
+    }
+
     private fun decodeFrameWithCpuMediaCodec(appCtx: Context, video: VideoScanner.Video): Bitmap? {
         val extractor = MediaExtractor()
         var pfd: android.os.ParcelFileDescriptor? = null
@@ -752,14 +748,8 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             try {
                 pfd = appCtx.contentResolver.openFileDescriptor(video.uri, "r")
                 if (pfd != null) {
-                    val realPath = Utils.findRealPath(pfd.fd)
-                    if (realPath != null) {
-                        extractor.setDataSource(realPath)
-                        sourceSet = true
-                    } else {
-                        extractor.setDataSource(pfd.fileDescriptor)
-                        sourceSet = true
-                    }
+                    extractor.setDataSource(pfd.fileDescriptor)
+                    sourceSet = true
                 }
             } catch (_: Exception) { }
 
@@ -781,11 +771,10 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                 }
             }
             if (videoTrackIndex < 0 || origFormat == null) return null
-
             extractor.selectTrack(videoTrackIndex)
 
-            val width = origFormat.getInteger(MediaFormat.KEY_WIDTH)
-            val height = origFormat.getInteger(MediaFormat.KEY_HEIGHT)
+            val width = if (origFormat.containsKey(MediaFormat.KEY_WIDTH)) origFormat.getInteger(MediaFormat.KEY_WIDTH) else 1920
+            val height = if (origFormat.containsKey(MediaFormat.KEY_HEIGHT)) origFormat.getInteger(MediaFormat.KEY_HEIGHT) else 1080
             val durationUs = when {
                 video.durationMs > 0 -> video.durationMs * 1000L
                 origFormat.containsKey(MediaFormat.KEY_DURATION) -> origFormat.getLong(MediaFormat.KEY_DURATION)
@@ -798,13 +787,9 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                 origMime
             }
 
+            // ساخت فرمت تمیز بدون دستکاری KEY_COLOR_FORMAT تا 10-bit P010 رد نشود
             val cleanFormat = MediaFormat.createVideoFormat(targetMime, width, height).apply {
-                // جلوگیری از کرش readSampleData روی فریم‌های سنگین 4K HDR10+
-                setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, maxOf(width * height, 2 * 1024 * 1024))
-                setInteger(
-                    MediaFormat.KEY_COLOR_FORMAT,
-                    android.media.MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible
-                )
+                setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, maxOf(width * height, 4 * 1024 * 1024))
                 for (csdKey in arrayOf("csd-0", "csd-1", "csd-2")) {
                     if (origFormat.containsKey(csdKey)) {
                         origFormat.getByteBuffer(csdKey)?.let { buf ->
@@ -816,123 +801,344 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                 }
             }
 
-            val seekTargetsUs = if (durationUs > 10_000_000L) {
-                longArrayOf((durationUs * 0.15).toLong(), (durationUs * 0.30).toLong(), 0L)
-            } else {
-                longArrayOf((durationUs * 0.25).toLong(), 0L)
+            // اولویت اول: دیکدر سخت‌افزاری گوشی (که 4K 2160p HDR10+ و 10-bit را در ۱۵ میلی‌ثانیه باز می‌کند)
+            // اولویت دوم: دیکدر نرم‌افزاری اندروید
+            val decoderCandidates = mutableListOf<String?>()
+            decoderCandidates.add(null) // null = MediaCodec.createDecoderByType (سخت‌افزاری پیش‌فرض)
+            if (targetMime == MediaFormat.MIMETYPE_VIDEO_HEVC) {
+                decoderCandidates.add("c2.android.hevc.decoder")
+                decoderCandidates.add("OMX.google.hevc.decoder")
+            } else if (targetMime == MediaFormat.MIMETYPE_VIDEO_AVC) {
+                decoderCandidates.add("c2.android.avc.decoder")
+                decoderCandidates.add("OMX.google.h264.decoder")
+            } else if (targetMime == "video/av01") {
+                decoderCandidates.add("c2.android.av1.decoder")
+                decoderCandidates.add("c2.android.av1-dav1d.decoder")
             }
 
-            val bufferInfo = MediaCodec.BufferInfo()
-            var fallbackBmp: Bitmap? = null
-
-            for (seekUs in seekTargetsUs) {
-                var codec: MediaCodec? = null
-                try {
-                    codec = if (targetMime == MediaFormat.MIMETYPE_VIDEO_HEVC) {
-                        try {
-                            MediaCodec.createByCodecName("c2.android.hevc.decoder")
-                        } catch (_: Exception) {
-                            try {
-                                MediaCodec.createByCodecName("OMX.google.hevc.decoder")
-                            } catch (_: Exception) {
-                                MediaCodec.createDecoderByType(targetMime)
-                            }
-                        }
-                    } else {
-                        MediaCodec.createDecoderByType(targetMime)
-                    }
-
-                    try {
-                        codec.configure(cleanFormat, null, null, 0)
-                    } catch (_: Exception) {
-                        codec.configure(origFormat, null, null, 0)
-                    }
-                    codec.start()
-
-                    try {
-                        extractor.seekTo(seekUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
-                        if (extractor.sampleTime < 0L && seekUs > 0L) {
-                            extractor.seekTo(0L, MediaExtractor.SEEK_TO_NEXT_SYNC)
-                        }
-                    } catch (_: Exception) {
-                        extractor.seekTo(0L, MediaExtractor.SEEK_TO_NEXT_SYNC)
-                    }
-
-                    var packetsSent = 0
-                    val maxPackets = 20 // ارسال تا ۲۰ پکت بدون قطع زودهنگام با EOS
-                    var inputEos = false
-                    var outputDone = false
-                    var loops = 0
-
-                    while (!outputDone && loops < 60) {
-                        loops++
-                        if (!inputEos) {
-                            val inIdx = codec.dequeueInputBuffer(10_000L)
-                            if (inIdx >= 0) {
-                                val inBuf = codec.getInputBuffer(inIdx)
-                                if (packetsSent >= maxPackets || inBuf == null) {
-                                    codec.queueInputBuffer(
-                                        inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM
-                                    )
-                                    inputEos = true
-                                } else {
-                                    inBuf.clear()
-                                    val sampleSize = try {
-                                        extractor.readSampleData(inBuf, 0)
-                                    } catch (_: Exception) {
-                                        -1
-                                    }
-                                    if (sampleSize < 0) {
-                                        codec.queueInputBuffer(
-                                            inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM
-                                        )
-                                        inputEos = true
-                                    } else {
-                                        val pts = extractor.sampleTime.coerceAtLeast(0L)
-                                        codec.queueInputBuffer(inIdx, 0, sampleSize, pts, 0)
-                                        packetsSent++
-                                        extractor.advance()
-                                    }
-                                }
-                            }
-                        }
-
-                        val outIdx = codec.dequeueOutputBuffer(bufferInfo, 15_000L)
-                        if (outIdx >= 0) {
-                            if (bufferInfo.size > 0) {
-                                val bmp = convertOutputToBitmap(codec, outIdx, bufferInfo)
-                                codec.releaseOutputBuffer(outIdx, false)
-                                if (bmp != null) {
-                                    if (!isMostlyBlack(bmp)) {
-                                        fallbackBmp?.recycle()
-                                        return bmp
-                                    }
-                                    if (fallbackBmp == null) fallbackBmp = bmp else bmp.recycle()
-                                    // یک فریم (هرچند تاریک) از این نقطه زمانی گرفتیم؛ می‌رویم سراغ seekUs بعدی
-                                    outputDone = true
-                                }
-                            } else {
-                                codec.releaseOutputBuffer(outIdx, false)
-                            }
-                            if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                                outputDone = true
-                            }
-                        }
-                    }
-                } catch (_: Exception) {
-                } finally {
-                    try { codec?.stop() } catch (_: Exception) { }
-                    try { codec?.release() } catch (_: Exception) { }
-                }
+            for (decoderName in decoderCandidates) {
+                val bmp = tryDecodeWithGlSurface(
+                    extractor = extractor,
+                    targetMime = targetMime,
+                    decoderName = decoderName,
+                    origFormat = origFormat,
+                    cleanFormat = cleanFormat,
+                    durationUs = durationUs
+                )
+                if (bmp != null) return bmp
             }
-            fallbackBmp
+            null
         } catch (e: Exception) {
+            Log.w(TAG, "decodeFrameWithCpuMediaCodec failed: ${video.name}", e)
             null
         } finally {
             try { extractor.release() } catch (_: Exception) { }
             try { pfd?.close() } catch (_: Exception) { }
         }
     }
+
+    private fun tryDecodeWithGlSurface(
+        extractor: MediaExtractor,
+        targetMime: String,
+        decoderName: String?,
+        origFormat: MediaFormat,
+        cleanFormat: MediaFormat,
+        durationUs: Long
+    ): Bitmap? {
+        val outW = THUMB_WIDTH.coerceAtLeast(320)
+        val outH = THUMB_HEIGHT.coerceAtLeast(180)
+
+        var eglDisplay = android.opengl.EGL14.EGL_NO_DISPLAY
+        var eglContext = android.opengl.EGL14.EGL_NO_CONTEXT
+        var eglSurface = android.opengl.EGL14.EGL_NO_SURFACE
+        var surfaceTexture: android.graphics.SurfaceTexture? = null
+        var surface: android.view.Surface? = null
+        var codec: MediaCodec? = null
+        var texId = 0
+
+        val frameSync = Object()
+        var frameAvailable = false
+
+        return try {
+            // ۱. راه‌اندازی محیط مخفی OpenGL ES 2.0 (EGL Pbuffer)
+            eglDisplay = android.opengl.EGL14.eglGetDisplay(android.opengl.EGL14.EGL_DEFAULT_DISPLAY)
+            if (eglDisplay == android.opengl.EGL14.EGL_NO_DISPLAY) return null
+            val version = IntArray(2)
+            if (!android.opengl.EGL14.eglInitialize(eglDisplay, version, 0, version, 1)) return null
+
+            val attribList = intArrayOf(
+                android.opengl.EGL14.EGL_RED_SIZE, 8,
+                android.opengl.EGL14.EGL_GREEN_SIZE, 8,
+                android.opengl.EGL14.EGL_BLUE_SIZE, 8,
+                android.opengl.EGL14.EGL_ALPHA_SIZE, 8,
+                android.opengl.EGL14.EGL_RENDERABLE_TYPE, android.opengl.EGL14.EGL_OPENGL_ES2_BIT,
+                android.opengl.EGL14.EGL_SURFACE_TYPE, android.opengl.EGL14.EGL_PBUFFER_BIT,
+                android.opengl.EGL14.EGL_NONE
+            )
+            val configs = arrayOfNulls<android.opengl.EGLConfig>(1)
+            val numConfigs = IntArray(1)
+            if (!android.opengl.EGL14.eglChooseConfig(eglDisplay, attribList, 0, configs, 0, 1, numConfigs, 0) ||
+                numConfigs[0] <= 0 || configs[0] == null
+            ) return null
+
+            val ctxAttribs = intArrayOf(android.opengl.EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, android.opengl.EGL14.EGL_NONE)
+            eglContext = android.opengl.EGL14.eglCreateContext(
+                eglDisplay, configs[0], android.opengl.EGL14.EGL_NO_CONTEXT, ctxAttribs, 0
+            )
+            val pbufferAttribs = intArrayOf(
+                android.opengl.EGL14.EGL_WIDTH, outW,
+                android.opengl.EGL14.EGL_HEIGHT, outH,
+                android.opengl.EGL14.EGL_NONE
+            )
+            eglSurface = android.opengl.EGL14.eglCreatePbufferSurface(eglDisplay, configs[0], pbufferAttribs, 0)
+            if (!android.opengl.EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) return null
+
+            // ۲. ساخت بافت سخت‌افزاری OES که تمام فرمت‌های 10-bit P010 و HDR10+ را خودکار به RGB تبدیل می‌کند
+            val textures = IntArray(1)
+            android.opengl.GLES20.glGenTextures(1, textures, 0)
+            texId = textures[0]
+            android.opengl.GLES20.glBindTexture(android.opengl.GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texId)
+            android.opengl.GLES20.glTexParameterf(
+                android.opengl.GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
+                android.opengl.GLES20.GL_TEXTURE_MIN_FILTER,
+                android.opengl.GLES20.GL_LINEAR.toFloat()
+            )
+            android.opengl.GLES20.glTexParameterf(
+                android.opengl.GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
+                android.opengl.GLES20.GL_TEXTURE_MAG_FILTER,
+                android.opengl.GLES20.GL_LINEAR.toFloat()
+            )
+
+            surfaceTexture = android.graphics.SurfaceTexture(texId).apply {
+                setDefaultBufferSize(outW, outH)
+                setOnFrameAvailableListener({
+                    synchronized(frameSync) {
+                        frameAvailable = true
+                        frameSync.notifyAll()
+                    }
+                }, glCallbackHandler)
+            }
+            surface = android.view.Surface(surfaceTexture)
+
+            // ۳. کامپایل شیدر OpenGL
+            val vertexShaderCode = """
+                attribute vec4 aPosition;
+                attribute vec4 aTexCoord;
+                uniform mat4 uSTMatrix;
+                varying vec2 vTexCoord;
+                void main() {
+                    gl_Position = aPosition;
+                    vTexCoord = (uSTMatrix * aTexCoord).xy;
+                }
+            """.trimIndent()
+            val fragmentShaderCode = """
+                #extension GL_OES_EGL_image_external : require
+                precision mediump float;
+                varying vec2 vTexCoord;
+                uniform samplerExternalOES sTexture;
+                void main() {
+                    gl_FragColor = texture2D(sTexture, vTexCoord);
+                }
+            """.trimIndent()
+
+            fun loadShader(type: Int, code: String): Int {
+                val s = android.opengl.GLES20.glCreateShader(type)
+                android.opengl.GLES20.glShaderSource(s, code)
+                android.opengl.GLES20.glCompileShader(s)
+                return s
+            }
+            val vs = loadShader(android.opengl.GLES20.GL_VERTEX_SHADER, vertexShaderCode)
+            val fs = loadShader(android.opengl.GLES20.GL_FRAGMENT_SHADER, fragmentShaderCode)
+            val program = android.opengl.GLES20.glCreateProgram().also {
+                android.opengl.GLES20.glAttachShader(it, vs)
+                android.opengl.GLES20.glAttachShader(it, fs)
+                android.opengl.GLES20.glLinkProgram(it)
+            }
+
+            val quadVertices = java.nio.ByteBuffer.allocateDirect(8 * 4)
+                .order(java.nio.ByteOrder.nativeOrder()).asFloatBuffer().apply {
+                    put(floatArrayOf(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f))
+                    position(0)
+                }
+            // مختصات بافت با اصلاح جهت عمودی برای glReadPixels
+            val quadTexCoords = java.nio.ByteBuffer.allocateDirect(8 * 4)
+                .order(java.nio.ByteOrder.nativeOrder()).asFloatBuffer().apply {
+                    put(floatArrayOf(0f, 1f, 1f, 1f, 0f, 0f, 1f, 0f))
+                    position(0)
+                }
+            val stMatrix = FloatArray(16)
+            val pixelBuf = java.nio.ByteBuffer.allocateDirect(outW * outH * 4)
+                .order(java.nio.ByteOrder.nativeOrder())
+
+            // ۴. راه‌اندازی MediaCodec متصل به Surface
+            codec = if (decoderName != null) {
+                MediaCodec.createByCodecName(decoderName)
+            } else {
+                MediaCodec.createDecoderByType(targetMime)
+            }
+
+            val configured = try {
+                codec.configure(cleanFormat, surface, null, 0)
+                true
+            } catch (_: Exception) {
+                try {
+                    codec.reset()
+                    codec.configure(origFormat, surface, null, 0)
+                    true
+                } catch (_: Exception) {
+                    false
+                }
+            }
+            if (!configured) return null
+            codec.start()
+
+            val seekTargetsUs = if (durationUs > 10_000_000L) {
+                longArrayOf((durationUs * 0.15).toLong(), (durationUs * 0.35).toLong(), 0L)
+            } else {
+                longArrayOf((durationUs * 0.30).toLong(), (durationUs * 0.60).toLong(), 0L)
+            }
+
+            val bufferInfo = MediaCodec.BufferInfo()
+            var fallbackBmp: Bitmap? = null
+
+            for (seekUs in seekTargetsUs) {
+                try {
+                    codec.flush()
+                    if (seekUs > 0L) {
+                        extractor.seekTo(seekUs, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+                        if (extractor.sampleTime < 0L) {
+                            extractor.seekTo(seekUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+                        }
+                    } else {
+                        extractor.seekTo(0L, MediaExtractor.SEEK_TO_NEXT_SYNC)
+                    }
+                } catch (_: Exception) {
+                    extractor.seekTo(0L, MediaExtractor.SEEK_TO_NEXT_SYNC)
+                }
+
+                var packetsSent = 0
+                var inputEos = false
+                var outputDone = false
+                var decodedFramesInSeek = 0
+                var loops = 0
+
+                while (!outputDone && loops < 90) {
+                    loops++
+                    if (!inputEos) {
+                        val inIdx = codec.dequeueInputBuffer(10_000L)
+                        if (inIdx >= 0) {
+                            val inBuf = codec.getInputBuffer(inIdx)
+                            if (packetsSent >= 45 || inBuf == null) {
+                                codec.queueInputBuffer(inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                inputEos = true
+                            } else {
+                                inBuf.clear()
+                                val sampleSize = try { extractor.readSampleData(inBuf, 0) } catch (_: Exception) { -1 }
+                                if (sampleSize < 0) {
+                                    codec.queueInputBuffer(inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                    inputEos = true
+                                } else {
+                                    val pts = extractor.sampleTime.coerceAtLeast(0L)
+                                    codec.queueInputBuffer(inIdx, 0, sampleSize, pts, 0)
+                                    packetsSent++
+                                    extractor.advance()
+                                }
+                            }
+                        }
+                    }
+
+                    val outIdx = codec.dequeueOutputBuffer(bufferInfo, 15_000L)
+                    if (outIdx >= 0) {
+                        val hasFrame = bufferInfo.size > 0
+                        synchronized(frameSync) { frameAvailable = false }
+                        codec.releaseOutputBuffer(outIdx, hasFrame)
+
+                        if (hasFrame) {
+                            synchronized(frameSync) {
+                                if (!frameAvailable) {
+                                    try { frameSync.wait(250L) } catch (_: InterruptedException) { }
+                                }
+                            }
+                            if (frameAvailable) {
+                                surfaceTexture.updateTexImage()
+                                surfaceTexture.getTransformMatrix(stMatrix)
+
+                                android.opengl.GLES20.glViewport(0, 0, outW, outH)
+                                android.opengl.GLES20.glClearColor(0f, 0f, 0f, 1f)
+                                android.opengl.GLES20.glClear(android.opengl.GLES20.GL_COLOR_BUFFER_BIT)
+                                android.opengl.GLES20.glUseProgram(program)
+
+                                val posLoc = android.opengl.GLES20.glGetAttribLocation(program, "aPosition")
+                                val texLoc = android.opengl.GLES20.glGetAttribLocation(program, "aTexCoord")
+                                val matLoc = android.opengl.GLES20.glGetUniformLocation(program, "uSTMatrix")
+
+                                android.opengl.GLES20.glEnableVertexAttribArray(posLoc)
+                                android.opengl.GLES20.glVertexAttribPointer(posLoc, 2, android.opengl.GLES20.GL_FLOAT, false, 0, quadVertices)
+                                android.opengl.GLES20.glEnableVertexAttribArray(texLoc)
+                                android.opengl.GLES20.glVertexAttribPointer(texLoc, 2, android.opengl.GLES20.GL_FLOAT, false, 0, quadTexCoords)
+                                android.opengl.GLES20.glUniformMatrix4fv(matLoc, 1, false, stMatrix, 0)
+
+                                android.opengl.GLES20.glDrawArrays(android.opengl.GLES20.GL_TRIANGLE_STRIP, 0, 4)
+                                pixelBuf.rewind()
+                                android.opengl.GLES20.glReadPixels(
+                                    0, 0, outW, outH,
+                                    android.opengl.GLES20.GL_RGBA,
+                                    android.opengl.GLES20.GL_UNSIGNED_BYTE,
+                                    pixelBuf
+                                )
+                                pixelBuf.rewind()
+                                val bmp = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
+                                bmp.copyPixelsFromBuffer(pixelBuf)
+
+                                decodedFramesInSeek++
+                                if (!isMostlyBlack(bmp)) {
+                                    fallbackBmp?.recycle()
+                                    return bmp
+                                }
+                                if (fallbackBmp == null) fallbackBmp = bmp else bmp.recycle()
+                                // اگر فریم اول سیاه بود (مثلاً Fade-in ابتدای ویدیوی کوتاه)، تا ۶ فریم بعدی را هم بخوان
+                                if (decodedFramesInSeek >= 6) {
+                                    outputDone = true
+                                }
+                            }
+                        }
+                        if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                            outputDone = true
+                        }
+                    }
+                }
+            }
+            fallbackBmp
+        } catch (_: Exception) {
+            null
+        } finally {
+            try { codec?.stop() } catch (_: Exception) { }
+            try { codec?.release() } catch (_: Exception) { }
+            try { surface?.release() } catch (_: Exception) { }
+            try { surfaceTexture?.release() } catch (_: Exception) { }
+            if (texId != 0) {
+                try { android.opengl.GLES20.glDeleteTextures(1, intArrayOf(texId), 0) } catch (_: Exception) { }
+            }
+            if (eglDisplay != android.opengl.EGL14.EGL_NO_DISPLAY) {
+                try {
+                    android.opengl.EGL14.eglMakeCurrent(
+                        eglDisplay,
+                        android.opengl.EGL14.EGL_NO_SURFACE,
+                        android.opengl.EGL14.EGL_NO_SURFACE,
+                        android.opengl.EGL14.EGL_NO_CONTEXT
+                    )
+                    if (eglSurface != android.opengl.EGL14.EGL_NO_SURFACE) {
+                        android.opengl.EGL14.eglDestroySurface(eglDisplay, eglSurface)
+                    }
+                    if (eglContext != android.opengl.EGL14.EGL_NO_CONTEXT) {
+                        android.opengl.EGL14.eglDestroyContext(eglDisplay, eglContext)
+                    }
+                    android.opengl.EGL14.eglTerminate(eglDisplay)
+                } catch (_: Exception) { }
+            }
+        }
+    }
+
 
 
     /** تبدیل بافر خروجی MediaCodec (چه 8-bit YUV_420_888 و چه 10-bit P010 / I010) به Bitmap */
