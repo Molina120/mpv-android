@@ -258,7 +258,8 @@ object SkipRangeManager {
             updateModeEnabled(isChecked)
         }
 
-        val alertDialog = AlertDialog.Builder(context)
+        view.setBackgroundResource(R.drawable.dialog_dark_bg)
+        val alertDialog = AlertDialog.Builder(context, R.style.AppTheme_DarkDialog)
             .setTitle(R.string.skip_title)
             .setView(view)
             .setPositiveButton(R.string.dialog_save) { _, _ ->
