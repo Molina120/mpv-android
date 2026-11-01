@@ -88,7 +88,6 @@
             android:background="@drawable/fab_circle"
             android:elevation="6dp"
             android:clickable="true"
-            android:focusable="true"
             android:foreground="?attr/selectableItemBackgroundBorderless"
             android:visibility="gone">
 
