@@ -238,8 +238,17 @@ object SkipRangeManager {
         }
 
         updateStatusPreview(cfg.rawInputText)
+        var btnClear: android.widget.Button? = null
+        fun updateClearButton() {
+            // CLEAR فقط وقتی فعال باشه که سوییچ روشن و کادر خالی نباشه
+            val active = switchSkipEnabled.isChecked && editSkipRanges.text.isNotEmpty()
+            // دکمه CLEAR فقط کمرنگ بشه، خاکستری نه
+            btnClear?.alpha = if (active) 1.0f else 0.35f
+            btnClear?.isEnabled = active
+        }
         editSkipRanges.doAfterTextChanged {
             updateStatusPreview(it?.toString() ?: "")
+            updateClearButton()
         }
 
         // اسکرول جهت‌آگاه: کادر متن هر وقت بتواند در جهت حرکت انگشت اسکرول کند،
@@ -280,15 +289,9 @@ object SkipRangeManager {
             txtSkipStatus.alpha = fadedAlpha
         }
         updateModeEnabled(switchSkipEnabled.isChecked)
-        var btnClear: android.widget.Button? = null
-        fun updateClearButton(enabled: Boolean) {
-            // دکمه CLEAR فقط کمرنگ بشه، خاکستری نه
-            btnClear?.alpha = if (enabled) 1.0f else 0.35f
-            btnClear?.isEnabled = enabled
-        }
         switchSkipEnabled.setOnCheckedChangeListener { _, isChecked ->
             updateModeEnabled(isChecked)
-            updateClearButton(isChecked)
+            updateClearButton()
         }
 
         view.setBackgroundResource(R.drawable.dialog_dark_bg)
@@ -315,7 +318,7 @@ object SkipRangeManager {
         alertDialog.show()
         // دکمه CLEAR: فقط کمرنگ (نه خاکستری) وقتی سوییچ خاموشه
         btnClear = alertDialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_NEUTRAL) as? android.widget.Button
-        updateClearButton(switchSkipEnabled.isChecked)
+        updateClearButton()
 
         alertDialog.window?.setSoftInputMode(
             WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN or
