@@ -57,6 +57,7 @@ object SubtitleStyleManager {
 
     data class BgOption(val nameRes: Int, val id: String)
 
+
     private val bgOptions = listOf(
         BgOption(R.string.bg_transparent, "transparent"),
         BgOption(R.string.bg_quarter_25, "quarter_25"),

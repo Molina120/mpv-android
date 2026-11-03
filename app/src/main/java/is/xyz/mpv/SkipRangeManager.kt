@@ -198,7 +198,7 @@ object SkipRangeManager {
         if (Utils.isTv(context)) {
             view.findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.switchSkipEnabled)?.setBackgroundResource(R.drawable.item_focus_selector)
             view.findViewById<android.widget.RadioButton>(R.id.radioSkipInside)?.setBackgroundResource(R.drawable.item_focus_selector)
-            view.findViewById<android.widget.RadioButton>(R.id.radioPlayOnly)?.setBackgroundResource(R.drawable.item_focus_selector)
+            view.findViewById<android.widget.RadioButton>(R.id.radioKeepOnly)?.setBackgroundResource(R.drawable.item_focus_selector)
         }
         val switchSkipEnabled = view.findViewById<SwitchCompat>(R.id.switchSkipEnabled)
         val editSkipRanges = view.findViewById<EditText>(R.id.editSkipRanges)
@@ -206,6 +206,7 @@ object SkipRangeManager {
         val radioSkipInside = view.findViewById<RadioButton>(R.id.radioSkipInside)
         val radioKeepOnly = view.findViewById<RadioButton>(R.id.radioKeepOnly)
         val txtSkipStatus = view.findViewById<TextView>(R.id.txtSkipStatus)
+        val txtSkipHintLabel = view.findViewById<TextView>(R.id.txtSkipHintLabel)
 
         switchSkipEnabled.isChecked = cfg.isEnabled
         switchSkipEnabled.isFocusable = true
@@ -270,10 +271,24 @@ object SkipRangeManager {
             radioSkipInside.isEnabled = enabled
             radioKeepOnly.isEnabled = enabled
             editSkipRanges.isEnabled = enabled
+            // نوشته‌ها خاکستری و کمرنگ بشن وقتی سوییچ خاموشه
+            val fadedAlpha = if (enabled) 1.0f else 0.35f
+            txtSkipHintLabel.alpha = fadedAlpha
+            editSkipRanges.alpha = fadedAlpha
+            radioSkipInside.alpha = fadedAlpha
+            radioKeepOnly.alpha = fadedAlpha
+            txtSkipStatus.alpha = fadedAlpha
         }
         updateModeEnabled(switchSkipEnabled.isChecked)
+        var btnClear: android.widget.Button? = null
+        fun updateClearButton(enabled: Boolean) {
+            // دکمه CLEAR فقط کمرنگ بشه، خاکستری نه
+            btnClear?.alpha = if (enabled) 1.0f else 0.35f
+            btnClear?.isEnabled = enabled
+        }
         switchSkipEnabled.setOnCheckedChangeListener { _, isChecked ->
             updateModeEnabled(isChecked)
+            updateClearButton(isChecked)
         }
 
         view.setBackgroundResource(R.drawable.dialog_dark_bg)
@@ -298,6 +313,9 @@ object SkipRangeManager {
             .setOnDismissListener { onDismiss() }
             .create()
         alertDialog.show()
+        // دکمه CLEAR: فقط کمرنگ (نه خاکستری) وقتی سوییچ خاموشه
+        btnClear = alertDialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_NEUTRAL) as? android.widget.Button
+        updateClearButton(switchSkipEnabled.isChecked)
 
         alertDialog.window?.setSoftInputMode(
             WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN or
